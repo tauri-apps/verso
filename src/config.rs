@@ -392,12 +392,16 @@ impl Config {
     pub fn create_protocols(&self) -> ProtocolRegistry {
         let handler = ResourceReader(self.resource_dir.clone());
         let mut protocols = ProtocolRegistry::with_internal_protocols();
-        protocols.register("verso", handler);
+        protocols
+            .register("verso", handler)
+            .expect("Registering custom protocol `verso` should not fail");
         for custom_protocol in &self.custom_protocols {
-            protocols.register(
-                &custom_protocol.scheme,
-                CustomProtocolHandler(custom_protocol.clone()),
-            );
+            let scheme = &custom_protocol.scheme;
+            if let Err(error) =
+                protocols.register(scheme, CustomProtocolHandler(custom_protocol.clone()))
+            {
+                log::warn!("Registering custom protocol {scheme} failed: {error:?}");
+            }
         }
         protocols
     }
@@ -556,9 +560,9 @@ impl ProtocolHandler for CustomProtocolHandler {
         self.0.fetchable
     }
 
-    // fn is_secure(&self) -> bool {
-    //     self.0.secure
-    // }
+    fn is_secure(&self) -> bool {
+        self.0.secure
+    }
 }
 
 /// Helper function to get default resource directory if it's not provided.

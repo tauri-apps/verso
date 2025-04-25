@@ -25,7 +25,7 @@ use euclid::Scale;
 use fonts::SystemFontService;
 use ipc_channel::ipc::{self, IpcSender};
 use ipc_channel::router::ROUTER;
-use layout_thread_2020;
+use layout;
 use log::{Log, Metadata, Record};
 use net::resource_thread;
 use profile;
@@ -253,7 +253,7 @@ impl Verso {
         }
 
         // Create layout factory
-        let layout_factory = Arc::new(layout_thread_2020::LayoutFactoryImpl());
+        let layout_factory = Arc::new(layout::LayoutFactoryImpl());
         let initial_state = InitialConstellationState {
             compositor_proxy: compositor_proxy.clone(),
             embedder_proxy,
@@ -318,10 +318,7 @@ impl Verso {
         if with_panel {
             window.create_panel(&constellation_sender, initial_url);
         } else {
-            window.create_tab(
-                &constellation_sender,
-                initial_url.into(),
-            );
+            window.create_tab(&constellation_sender, initial_url.into());
         }
 
         let mut windows = HashMap::new();
@@ -404,7 +401,7 @@ impl Verso {
                 }
             }
             // self.windows.remove(&window_id);
-            compositor.maybe_start_shutting_down();
+            compositor.start_shutting_down();
         } else {
             window.handle_winit_window_event(&self.constellation_sender, compositor, &event);
             return window.resizing;
@@ -515,7 +512,7 @@ impl Verso {
         if self.windows.is_empty() {
             self.compositor
                 .as_mut()
-                .map(IOCompositor::maybe_start_shutting_down);
+                .map(IOCompositor::start_shutting_down);
         }
 
         // Check compositor status and set control flow.
@@ -592,7 +589,7 @@ impl Verso {
         match message {
             ToVersoMessage::Exit => {
                 if let Some(compositor) = &mut self.compositor {
-                    compositor.maybe_start_shutting_down();
+                    compositor.start_shutting_down();
                 }
             }
             ToVersoMessage::ListenToOnCloseRequested => {

@@ -1,19 +1,23 @@
+use std::cell::Cell;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use crate::rendering::RenderingContext;
+use crate::touch::{TouchAction, TouchHandler};
+use crate::window::Window;
 use base::cross_process_instant::CrossProcessInstant;
 use base::id::{PipelineId, WebViewId};
 use base::{Epoch, WebRenderEpochToU16};
+use bitflags::bitflags;
 use compositing_traits::display_list::{CompositorDisplayListInfo, HitTestInfo, ScrollTree};
 use compositing_traits::{
     CompositionPipeline, CompositorMsg, CompositorProxy, ImageUpdate, SendableFrameTree,
 };
 use constellation_traits::{
-    AnimationTickType, EmbedderToConstellationMessage, PaintMetricEvent, ScrollState,
-    WindowSizeType,
+    EmbedderToConstellationMessage, PaintMetricEvent, ScrollState, WindowSizeType,
 };
 use crossbeam_channel::{Receiver, Sender};
 use dpi::PhysicalSize;
@@ -45,10 +49,6 @@ use webrender_api::{
     SpatialTreeItemKey, TransformStyle,
 };
 use winit::window::WindowId;
-
-use crate::rendering::RenderingContext;
-use crate::touch::{TouchAction, TouchHandler};
-use crate::window::Window;
 
 /// Data used to construct a compositor.
 pub struct InitialCompositorState {
@@ -122,11 +122,8 @@ pub struct IOCompositor {
     /// Tracks details about each active pipeline that the compositor knows about.
     pipeline_details: HashMap<PipelineId, PipelineDetails>,
 
-    /// Tracks whether we should composite this frame.
-    composition_request: CompositionRequest,
-
-    /// check if the surface is ready to present.
-    pub ready_to_present: bool,
+    /// Tracks whether or not the view needs to be repainted.
+    needs_repaint: Cell<RepaintReason>,
 
     /// Tracks whether we are in the process of shutting down, or have shut down and should close
     /// the compositor.
@@ -208,27 +205,21 @@ enum ScrollZoomEvent {
     Scroll(ScrollEvent),
 }
 
-/// Why we performed a composite. This is used for debugging.
-///
-/// TODO: It would be good to have a bit more precision here about why a composite
-/// was originally triggered, but that would require tracking the reason when a
-/// frame is queued in WebRender and then remembering when the frame is ready.
-#[derive(Clone, Copy, Debug, PartialEq)]
-enum CompositingReason {
-    /// We're performing the single composite in headless mode.
-    Headless,
-    /// We're performing a composite to run an animation.
-    Animation,
-    /// A new WebRender frame has arrived.
-    NewWebRenderFrame,
-    /// The window has been resized and will need to be synchronously repainted.
-    Resize,
-}
+/// Why we need to be repainted. This is used for debugging.
+#[derive(Clone, Copy, Default)]
+struct RepaintReason(u8);
 
-#[derive(Debug, PartialEq)]
-enum CompositionRequest {
-    NoCompositingNecessary,
-    CompositeNow(CompositingReason),
+bitflags! {
+    impl RepaintReason: u8 {
+        /// We're performing the single repaint in headless mode.
+        const ReadyForScreenshot = 1 << 0;
+        /// We're performing a repaint to run an animation.
+        const ChangedAnimationState = 1 << 1;
+        /// A new WebRender frame has arrived.
+        const NewWebRenderFrame = 1 << 2;
+        /// The window has been resized and will need to be synchronously repainted.
+        const Resize = 1 << 3;
+    }
 }
 
 /// Shutdown State of the compositor
@@ -330,6 +321,18 @@ impl PipelineDetails {
             };
         }
     }
+
+    // pub(crate) fn animations_or_animation_callbacks_running(&self) -> bool {
+    //     self.animations_running || self.animation_callbacks_running
+    // }
+
+    // pub(crate) fn animation_callbacks_running(&self) -> bool {
+    //     self.animation_callbacks_running
+    // }
+
+    pub(crate) fn animating(&self) -> bool {
+        !self.throttled && (self.animation_callbacks_running || self.animations_running)
+    }
 }
 
 impl IOCompositor {
@@ -349,7 +352,7 @@ impl IOCompositor {
             webviews: HashMap::new(),
             pipeline_details: HashMap::new(),
             scale_factor,
-            composition_request: CompositionRequest::NoCompositingNecessary,
+            needs_repaint: Cell::default(),
             touch_handler: TouchHandler::new(),
             pending_scroll_zoom_events: Vec::new(),
             shutdown_state: ShutdownState::NotShuttingDown,
@@ -369,7 +372,6 @@ impl IOCompositor {
             pending_frames: 0,
             last_animation_tick: Instant::now(),
             is_animating: false,
-            ready_to_present: false,
         };
 
         // Make sure the GL state is OK
@@ -382,6 +384,17 @@ impl IOCompositor {
         if let Some(webrender) = self.webrender.take() {
             webrender.deinit();
         }
+    }
+
+    fn set_needs_repaint(&self, reason: RepaintReason) {
+        let mut needs_repaint = self.needs_repaint.get();
+        needs_repaint.insert(reason);
+        self.needs_repaint.set(needs_repaint);
+    }
+
+    ///
+    pub fn needs_repaint(&self) -> bool {
+        !self.needs_repaint.get().is_empty()
     }
 
     /// Get the current size of the rendering context.
@@ -415,15 +428,13 @@ impl IOCompositor {
         }
     }
 
-    /// Tell compositor to start shutting down.
-    pub fn maybe_start_shutting_down(&mut self) {
-        if self.shutdown_state == ShutdownState::NotShuttingDown {
-            debug!("Shutting down the constellation for WindowEvent::Quit");
-            self.start_shutting_down();
+    ///
+    pub fn start_shutting_down(&mut self) {
+        if self.shutdown_state != ShutdownState::NotShuttingDown {
+            warn!("Requested shutdown while already shutting down");
+            return;
         }
-    }
 
-    fn start_shutting_down(&mut self) {
         debug!("Compositor sending Exit message to Constellation");
         if let Err(e) = self
             .constellation_chan
@@ -499,7 +510,11 @@ impl IOCompositor {
                 pipeline_id,
                 animation_state,
             ) => {
-                self.change_running_animations_state(pipeline_id, animation_state);
+                if self.change_pipeline_running_animations_state(pipeline_id, animation_state) {
+                    // These operations should eventually happen per-WebView, but they are
+                    // global now as rendering is still global to all WebViews.
+                    self.process_animations(true);
+                }
             }
 
             CompositorMsg::CreateOrUpdateWebView(frame_tree) => {
@@ -532,12 +547,13 @@ impl IOCompositor {
                 } else {
                     self.ready_to_save_state = ReadyState::Unknown;
                 }
-                self.composite_if_necessary(CompositingReason::Headless);
+                self.set_needs_repaint(RepaintReason::ReadyForScreenshot);
             }
 
             CompositorMsg::SetThrottled(_webview_id, pipeline_id, throttled) => {
-                self.pipeline_details(pipeline_id).throttled = throttled;
-                self.process_animations(true);
+                if self.set_throttled(pipeline_id, throttled) {
+                    self.process_animations(true);
+                }
             }
 
             CompositorMsg::PipelineExited(_webview_id, pipeline_id, sender) => {
@@ -556,14 +572,14 @@ impl IOCompositor {
                 }
 
                 if recomposite_needed || self.animation_callbacks_active() {
-                    self.composite_if_necessary(CompositingReason::NewWebRenderFrame)
+                    self.set_needs_repaint(RepaintReason::NewWebRenderFrame)
                 }
             }
 
             CompositorMsg::LoadComplete(_) => {
                 // If we're painting in headless mode, schedule a recomposite.
                 if self.wait_for_stable_image {
-                    self.composite_if_necessary(CompositingReason::Headless);
+                    self.set_needs_repaint(RepaintReason::ReadyForScreenshot);
                 }
             }
 
@@ -895,37 +911,47 @@ impl IOCompositor {
         transaction.generate_frame(0, true /* present */, reason);
     }
 
-    /// Sets or unsets the animations-running flag for the given pipeline, and schedules a
-    /// recomposite if necessary.
-    fn change_running_animations_state(
+    /// Sets or unsets the animations-running flag for the given pipeline. Returns
+    /// true if the [`WebViewRenderer`]'s overall animating state changed.
+    pub(crate) fn change_pipeline_running_animations_state(
         &mut self,
         pipeline_id: PipelineId,
         animation_state: AnimationState,
-    ) {
+    ) -> bool {
+        let pipeline_details = self.pipeline_details(pipeline_id);
         match animation_state {
             AnimationState::AnimationsPresent => {
-                let throttled = self.pipeline_details(pipeline_id).throttled;
-                self.pipeline_details(pipeline_id).animations_running = true;
-                if !throttled {
-                    self.composite_if_necessary(CompositingReason::Animation);
-                }
+                pipeline_details.animations_running = true;
             }
             AnimationState::AnimationCallbacksPresent => {
-                let throttled = self.pipeline_details(pipeline_id).throttled;
-                self.pipeline_details(pipeline_id)
-                    .animation_callbacks_running = true;
-                if !throttled {
-                    self.tick_animations_for_pipeline(pipeline_id);
-                }
+                pipeline_details.animation_callbacks_running = true;
             }
             AnimationState::NoAnimationsPresent => {
-                self.pipeline_details(pipeline_id).animations_running = false;
+                pipeline_details.animations_running = false;
             }
             AnimationState::NoAnimationCallbacksPresent => {
-                self.pipeline_details(pipeline_id)
-                    .animation_callbacks_running = false;
+                pipeline_details.animation_callbacks_running = false;
             }
         }
+        self.update_animation_state()
+    }
+
+    /// Sets or unsets the throttled flag for the given pipeline. Returns
+    /// true if the [`WebViewRenderer`]'s overall animating state changed.
+    pub(crate) fn set_throttled(&mut self, pipeline_id: PipelineId, throttled: bool) -> bool {
+        self.pipeline_details(pipeline_id).throttled = throttled;
+
+        // Throttling a pipeline can cause it to be taken into the "not-animating" state.
+        self.update_animation_state()
+    }
+
+    pub(crate) fn update_animation_state(&mut self) -> bool {
+        let animating = self
+            .pipeline_details
+            .values()
+            .any(PipelineDetails::animating);
+        let old_animating = std::mem::replace(&mut self.is_animating, animating);
+        old_animating != self.is_animating
     }
 
     fn pipeline_details(&mut self, pipeline_id: PipelineId) -> &mut PipelineDetails {
@@ -1293,7 +1319,7 @@ impl IOCompositor {
         transaction.set_document_view(DeviceIntRect::from_size(self.viewport.to_i32()));
         self.webrender_api
             .send_transaction(self.webrender_document, transaction);
-        self.composite_if_necessary(CompositingReason::Resize);
+        self.set_needs_repaint(RepaintReason::Resize);
     }
 
     /// Handle the window scale factor event and return a boolean to tell embedder if it should further
@@ -1305,7 +1331,7 @@ impl IOCompositor {
 
         self.scale_factor = Scale::new(scale_factor);
         self.update_after_zoom_or_hidpi_change(window);
-        self.composite_if_necessary(CompositingReason::Resize);
+        self.set_needs_repaint(RepaintReason::Resize);
         true
     }
 
@@ -1696,40 +1722,29 @@ impl IOCompositor {
         }
         self.last_animation_tick = Instant::now();
 
-        let mut pipeline_ids = vec![];
-        for (pipeline_id, pipeline_details) in &self.pipeline_details {
-            if (pipeline_details.animations_running || pipeline_details.animation_callbacks_running)
-                && !pipeline_details.throttled
+        let animating_webviews: Vec<_> = self
+            .pipeline_details
+            .iter()
+            .filter_map(|(_, pipline_detail)| {
+                if pipline_detail.animating() {
+                    pipline_detail
+                        .pipeline
+                        .as_ref()
+                        .map(|pipline| pipline.webview_id)
+                } else {
+                    None
+                }
+            })
+            .collect();
+        if !animating_webviews.is_empty() {
+            if let Err(error) =
+                self.constellation_chan
+                    .send(EmbedderToConstellationMessage::TickAnimation(
+                        animating_webviews,
+                    ))
             {
-                pipeline_ids.push(*pipeline_id);
+                warn!("Sending tick to constellation failed ({error:?}).");
             }
-        }
-        self.is_animating = !pipeline_ids.is_empty();
-        for pipeline_id in &pipeline_ids {
-            self.tick_animations_for_pipeline(*pipeline_id)
-        }
-    }
-
-    fn tick_animations_for_pipeline(&mut self, pipeline_id: PipelineId) {
-        let animation_callbacks_running = self
-            .pipeline_details(pipeline_id)
-            .animation_callbacks_running;
-        let animations_running = self.pipeline_details(pipeline_id).animations_running;
-        if !animation_callbacks_running && !animations_running {
-            return;
-        }
-
-        let mut tick_type = AnimationTickType::empty();
-        if animations_running {
-            tick_type.insert(AnimationTickType::CSS_ANIMATIONS_AND_TRANSITIONS);
-        }
-        if animation_callbacks_running {
-            tick_type.insert(AnimationTickType::REQUEST_ANIMATION_FRAME);
-        }
-
-        let msg = EmbedderToConstellationMessage::TickAnimation(pipeline_id, tick_type);
-        if let Err(e) = self.constellation_chan.send(msg) {
-            warn!("Sending tick to constellation failed ({:?}).", e);
         }
     }
 
@@ -1883,18 +1898,23 @@ impl IOCompositor {
 
     /// Composite to the given target if any, or the current target otherwise.
     pub fn composite(&mut self, window: &Window) {
-        match self.composite_specific_target(window) {
-            Ok(_) => {
-                if self.wait_for_stable_image {
-                    println!(
-                        "Shutting down the Constellation after generating an output file or exit flag specified"
-                    );
-                    self.start_shutting_down();
-                }
-            }
-            Err(error) => {
-                trace!("Unable to composite: {error:?}");
-            }
+        if let Err(error) = self.composite_specific_target(window) {
+            warn!("Unable to composite: {error:?}");
+            return;
+        }
+
+        // We've painted the default target, which means that from the embedder's perspective,
+        // the scene no longer needs to be repainted.
+        self.needs_repaint.set(RepaintReason::empty());
+
+        // Queue up any subsequent paints for animations.
+        self.process_animations(true);
+
+        if self.wait_for_stable_image {
+            println!(
+                "Shutting down the Constellation after generating an output file or exit flag specified"
+            );
+            self.start_shutting_down();
         }
     }
 
@@ -1947,20 +1967,7 @@ impl IOCompositor {
 
         self.send_pending_paint_metrics_messages_after_composite();
 
-        self.composition_request = CompositionRequest::NoCompositingNecessary;
-        self.ready_to_present = true;
-
-        self.process_animations(true);
-
         Ok(())
-    }
-
-    fn composite_if_necessary(&mut self, reason: CompositingReason) {
-        trace!(
-            "Will schedule a composite {reason:?}. Previously was {:?}",
-            self.composition_request
-        );
-        self.composition_request = CompositionRequest::CompositeNow(reason)
     }
 
     #[track_caller]
@@ -2019,13 +2026,10 @@ impl IOCompositor {
         }
 
         if let Some((window, _)) = windows.get(&self.current_window) {
-            match self.composition_request {
-                CompositionRequest::NoCompositingNecessary => {}
-                CompositionRequest::CompositeNow(_) => {
-                    self.composite(window);
-                    window.request_redraw();
-                }
-            }
+            // if self.needs_repaint() {
+            //     self.composite(window);
+            //     window.request_redraw();
+            // }
 
             if !self.pending_scroll_zoom_events.is_empty() {
                 self.process_pending_scroll_events(window)
