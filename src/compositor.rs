@@ -392,7 +392,7 @@ impl IOCompositor {
         self.needs_repaint.set(needs_repaint);
     }
 
-    ///
+    /// Whether or not the view needs to be repainted.
     pub fn needs_repaint(&self) -> bool {
         !self.needs_repaint.get().is_empty()
     }
@@ -428,7 +428,7 @@ impl IOCompositor {
         }
     }
 
-    ///
+    /// Tell compositor to start shutting down.
     pub fn start_shutting_down(&mut self) {
         if self.shutdown_state != ShutdownState::NotShuttingDown {
             warn!("Requested shutdown while already shutting down");
@@ -2026,11 +2026,6 @@ impl IOCompositor {
         }
 
         if let Some((window, _)) = windows.get(&self.current_window) {
-            // if self.needs_repaint() {
-            //     self.composite(window);
-            //     window.request_redraw();
-            // }
-
             if !self.pending_scroll_zoom_events.is_empty() {
                 self.process_pending_scroll_events(window)
             }
