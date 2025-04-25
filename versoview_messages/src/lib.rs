@@ -155,6 +155,8 @@ pub struct ConfigFromController {
     /// Path to resource directory. If None, Verso will try to get default directory. And if that
     /// still doesn't exist, all resource configuration will set to default values.
     pub resources_directory: Option<PathBuf>,
+    /// Register those custom protocols
+    pub custom_protocols: Vec<CustomProtocol>,
 }
 
 impl Default for ConfigFromController {
@@ -178,6 +180,7 @@ impl Default for ConfigFromController {
             user_scripts: Vec::new(),
             zoom_level: None,
             resources_directory: None,
+            custom_protocols: Vec::new(),
         }
     }
 }
@@ -236,4 +239,44 @@ pub struct WebResourceRequestResponse {
     pub id: uuid::Uuid,
     #[serde(with = "http_serde_ext::response::option")]
     pub response: Option<http::Response<Vec<u8>>>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CustomProtocol {
+    pub scheme: String,
+    pub secure: bool,
+    pub fetchable: bool,
+}
+
+pub struct CustomProtocolBuilder(CustomProtocol);
+
+impl CustomProtocolBuilder {
+    /// Create a new custom protocol
+    pub fn new(scheme: impl Into<String>) -> Self {
+        Self(CustomProtocol {
+            scheme: scheme.into(),
+            secure: true,
+            fetchable: true,
+        })
+    }
+
+    /// Set if the protocol can be used by `fetch`
+    pub fn set_fetchable(mut self, fetchable: bool) -> Self {
+        self.0.fetchable = fetchable;
+        self
+    }
+
+    /// Set if the protocol can be used in a [secure context]
+    ///
+    /// [secure context]: https://developer.mozilla.org/en-US/docs/Web/Security/Secure_Contexts
+    pub fn set_secure(mut self, secure: bool) -> Self {
+        self.0.secure = secure;
+        self
+    }
+}
+
+impl From<CustomProtocolBuilder> for CustomProtocol {
+    fn from(value: CustomProtocolBuilder) -> Self {
+        value.0
+    }
 }
