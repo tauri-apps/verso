@@ -17,7 +17,7 @@ use servo_config::{
     opts::{Opts, OutputOptions, set_options},
     prefs::Preferences,
 };
-use versoview_messages::{ConfigFromController, UserScript};
+use versoview_messages::{ConfigFromController, CustomProtocol, UserScript};
 use winit::window::{Fullscreen, WindowAttributes};
 
 /// Servo time profile settings
@@ -282,6 +282,8 @@ pub struct Config {
     /// Path to resource directory. If None, Verso will try to get default directory. And if that
     /// still doesn't exist, all resource configuration will set to default values.
     pub resource_dir: PathBuf,
+    /// Register those custom protocols
+    pub custom_protocols: Vec<CustomProtocol>,
 }
 
 impl Config {
@@ -382,6 +384,7 @@ impl Config {
                 .collect(),
             zoom_level: config.zoom_level,
             resource_dir,
+            custom_protocols: config.custom_protocols,
         }
     }
 
@@ -389,7 +392,17 @@ impl Config {
     pub fn create_protocols(&self) -> ProtocolRegistry {
         let handler = ResourceReader(self.resource_dir.clone());
         let mut protocols = ProtocolRegistry::with_internal_protocols();
-        protocols.register("verso", handler);
+        protocols
+            .register("verso", handler)
+            .expect("Registering custom protocol `verso` should not fail");
+        for custom_protocol in &self.custom_protocols {
+            let scheme = &custom_protocol.scheme;
+            if let Err(error) =
+                protocols.register(scheme, CustomProtocolHandler(custom_protocol.clone()))
+            {
+                log::warn!("Registering custom protocol {scheme} failed: {error:?}");
+            }
+        }
         protocols
     }
 
@@ -525,6 +538,30 @@ impl ProtocolHandler for ResourceReader {
         };
 
         Box::pin(std::future::ready(response))
+    }
+}
+
+struct CustomProtocolHandler(CustomProtocol);
+
+impl ProtocolHandler for CustomProtocolHandler {
+    #[allow(unused_variables)]
+    fn load(
+        &self,
+        request: &mut Request,
+        done_chan: &mut net::fetch::methods::DoneChannel,
+        context: &net::fetch::methods::FetchContext,
+    ) -> std::pin::Pin<Box<dyn Future<Output = Response> + Send>> {
+        Box::pin(std::future::ready(Response::network_internal_error(
+            "This should be handled through `on_web_resource_requested` instead",
+        )))
+    }
+
+    fn is_fetchable(&self) -> bool {
+        self.0.fetchable
+    }
+
+    fn is_secure(&self) -> bool {
+        self.0.secure
     }
 }
 

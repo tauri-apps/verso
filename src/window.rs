@@ -155,7 +155,7 @@ impl Window {
                 tab_manager: TabManager::new(),
                 focused_webview_id: None,
                 webview_menu: None,
-                show_bookmark: false
+                show_bookmark: false,
             },
             rendering_context,
         )
@@ -201,7 +201,7 @@ impl Window {
             tab_manager: TabManager::new(),
             focused_webview_id: None,
             webview_menu: None,
-            show_bookmark: false
+            show_bookmark: false,
         };
         compositor.swap_current_window(&mut window);
         window
@@ -394,12 +394,12 @@ impl Window {
     ) {
         match event {
             WindowEvent::RedrawRequested => {
-                if compositor.ready_to_present {
+                if compositor.needs_repaint() {
                     self.window.pre_present_notify();
+                    compositor.composite(self);
                     if let Err(err) = compositor.rendering_context.present(&self.surface) {
                         log::warn!("Failed to present surface: {:?}", err);
                     }
-                    compositor.ready_to_present = false;
                 }
             }
             WindowEvent::Focused(focused) => {

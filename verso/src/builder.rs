@@ -1,6 +1,6 @@
 use dpi::{Position, Size};
 use std::path::{Path, PathBuf};
-use versoview_messages::{ConfigFromController, ProfilerSettings, UserScript};
+use versoview_messages::{ConfigFromController, CustomProtocol, ProfilerSettings, UserScript};
 
 use crate::VersoviewController;
 
@@ -125,6 +125,40 @@ impl VersoBuilder {
     /// Sets the resource directory path.
     pub fn resources_directory(mut self, path: impl Into<PathBuf>) -> Self {
         self.0.resources_directory = Some(path.into());
+        self
+    }
+
+    /// Registers a custom protocol.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// let verso_builder =
+    ///     VersoBuilder::new().custom_protocol(CustomProtocolBuilder::new("custom-protocol-1"));
+    /// ```
+    pub fn custom_protocol(mut self, custom_protocol: impl Into<CustomProtocol>) -> Self {
+        self.0.custom_protocols.push(custom_protocol.into());
+        self
+    }
+
+    /// Registers multiple custom protocols.
+    ///
+    /// ## Example
+    ///
+    /// ```
+    /// let verso_builder = VersoBuilder::new().custom_protocols([
+    ///     CustomProtocolBuilder::new("custom-protocol-1"),
+    ///     CustomProtocolBuilder::new("custom-protocol-2"),
+    /// ]);
+    /// ```
+    pub fn custom_protocols<I, C>(mut self, custom_protocols: I) -> Self
+    where
+        I: IntoIterator<Item = C>,
+        C: Into<CustomProtocol>,
+    {
+        for custom_protocol in custom_protocols {
+            self = self.custom_protocol(custom_protocol);
+        }
         self
     }
 
