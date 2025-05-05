@@ -1,0 +1,106 @@
+name: Check
+
+on:
+  workflow_dispatch:
+  merge_group:
+  pull_request:
+    branches:
+      - main
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
+      # https://github.com/servo/servo/blob/a0730d7154e183a9b2d9a9282061e6c67d87a263/.github/workflows/linux.yml#L141
+      - name: Set LIBCLANG_PATH # This is needed for bindgen in mozangle.
+        run: echo "LIBCLANG_PATH=/usr/lib/llvm-14/lib" >> $GITHUB_ENV
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt install build-essential python3-pip ccache clang cmake curl \
+            g++ git gperf libdbus-1-dev libfreetype6-dev libgl1-mesa-dri \
+            libgles2-mesa-dev libglib2.0-dev libgstreamer-plugins-base1.0-dev \
+            gstreamer1.0-plugins-good libgstreamer-plugins-good1.0-dev \
+            gstreamer1.0-plugins-bad libgstreamer-plugins-bad1.0-dev \
+            gstreamer1.0-plugins-ugly gstreamer1.0-plugins-base \
+            libgstreamer-plugins-base1.0-dev gstreamer1.0-libav \
+            libgstrtspserver-1.0-dev gstreamer1.0-tools libges-1.0-dev \
+            libharfbuzz-dev liblzma-dev libunwind-dev libvulkan1 \
+            libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 xorg-dev sway \
+            python3-mako
+
+      - name: Build
+        env:
+          SCCACHE_GHA_ENABLED: true
+          RUSTC_WRAPPER: 'sccache'
+        run: cargo check
+
+  check-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install mako
+        run: python -m pip install mako
+
+      - name: Install scoop
+        uses: MinoruSekine/setup-scoop@v4
+      - name: Install dependencies
+        run: |
+          scoop install cmake
+
+      - name: Build
+        env:
+          SCCACHE_GHA_ENABLED: true
+          RUSTC_WRAPPER: "sccache"
+        run: cargo check
+
+  check-mac:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run sccache-cache
+        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - name: Install Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install mako
+        run: python -m pip install mako
+
+      - name: Install dependencies
+        run: |
+          brew install cmake
+          curl https://gstreamer.freedesktop.org/data/pkg/osx/1.24.6/gstreamer-1.0-1.24.6-universal.pkg -o runtime.pkg
+          sudo installer -pkg runtime.pkg -target /
+          curl https://gstreamer.freedesktop.org/data/pkg/osx/1.24.6/gstreamer-1.0-devel-1.24.6-universal.pkg -o develop.pkg
+          sudo installer -pkg develop.pkg -target /
+
+      - name: Build
+        env:
+          SCCACHE_GHA_ENABLED: true
+          RUSTC_WRAPPER: "sccache"
+        run: cargo check
