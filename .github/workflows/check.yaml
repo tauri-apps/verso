@@ -20,8 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.4
+      - uses: Swatinem/rust-cache@v2
 
       # https://github.com/servo/servo/blob/a0730d7154e183a9b2d9a9282061e6c67d87a263/.github/workflows/linux.yml#L141
       - name: Set LIBCLANG_PATH # This is needed for bindgen in mozangle.
@@ -43,18 +42,15 @@ jobs:
             libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 xorg-dev sway \
             python3-mako
 
-      - name: Build
-        env:
-          SCCACHE_GHA_ENABLED: true
-          RUSTC_WRAPPER: 'sccache'
+      - name: Check
         run: cargo check
 
   check-windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -70,18 +66,15 @@ jobs:
         run: |
           scoop install cmake
 
-      - name: Build
-        env:
-          SCCACHE_GHA_ENABLED: true
-          RUSTC_WRAPPER: "sccache"
+      - name: Check
         run: cargo check
 
   check-mac:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -99,8 +92,5 @@ jobs:
           curl https://gstreamer.freedesktop.org/data/pkg/osx/1.24.6/gstreamer-1.0-devel-1.24.6-universal.pkg -o develop.pkg
           sudo installer -pkg develop.pkg -target /
 
-      - name: Build
-        env:
-          SCCACHE_GHA_ENABLED: true
-          RUSTC_WRAPPER: "sccache"
+      - name: Check
         run: cargo check

@@ -14,8 +14,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.4
+      - uses: Swatinem/rust-cache@v2
 
       # https://github.com/servo/servo/blob/a0730d7154e183a9b2d9a9282061e6c67d87a263/.github/workflows/linux.yml#L141
       - name: Set LIBCLANG_PATH # This is needed for bindgen in mozangle.
@@ -38,9 +37,6 @@ jobs:
             python3-mako
 
       - name: Build
-        env:
-          SCCACHE_GHA_ENABLED: true
-          RUSTC_WRAPPER: 'sccache'
         run: cargo build --features embed-useragent-stylesheets --release
 
       - name: Make archive
@@ -56,8 +52,8 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -74,9 +70,6 @@ jobs:
           scoop install cmake
 
       - name: Build
-        env:
-          SCCACHE_GHA_ENABLED: true
-          RUSTC_WRAPPER: "sccache"
         run: cargo build --features embed-useragent-stylesheets --release
 
       - name: Make archive
@@ -98,8 +91,8 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Run sccache-cache
-        uses: mozilla-actions/sccache-action@v0.0.4
+
+      - uses: Swatinem/rust-cache@v2
 
       - name: Install Python
         uses: actions/setup-python@v5
@@ -121,9 +114,6 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Build
-        env:
-          SCCACHE_GHA_ENABLED: true
-          RUSTC_WRAPPER: "sccache"
         run: cargo build --target ${{ matrix.target }} --features embed-useragent-stylesheets --release
 
       - name: Make archive
