@@ -980,7 +980,7 @@ impl webrender::api::RenderNotifier for RenderNotifier {
     fn new_frame_ready(
         &self,
         document_id: DocumentId,
-        publish_id: FramePublishId,
+        _publish_id: FramePublishId,
         params: &FrameReadyParams,
     ) {
         self.compositor_proxy
