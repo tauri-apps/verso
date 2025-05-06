@@ -96,7 +96,7 @@ pub fn default_output_directory() -> PathBuf {
         .to_path_buf()
 }
 
-/// Default archive base URL: https://github.com/versotile-org/versoview-release/releases
+/// Default archive base URL: <https://github.com/versotile-org/versoview-release/releases>
 pub const fn default_archive_base_url() -> &'static str {
     "https://github.com/versotile-org/versoview-release/releases"
 }
