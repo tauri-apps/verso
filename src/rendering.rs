@@ -152,6 +152,7 @@ impl RenderingContext {
         );
         self.gl
             .viewport(0, 0, size.width as i32, size.height as i32);
+        self.size.set(size);
     }
 
     /// Present the surface of the rendering context.
