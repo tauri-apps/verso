@@ -468,14 +468,6 @@ impl ResourceReaderMethods for ResourceReader {
                 // Rigppy image is the only one needs to be valid bytes.
                 // Others can be empty and Servo will set to default.
                 Resource::RippyPNG => &include_bytes!("../resources/rippy.png")[..],
-                #[cfg(feature = "embed-useragent-stylesheets")]
-                Resource::UserAgentCSS => &include_bytes!("../resources/user-agent.css")[..],
-                #[cfg(feature = "embed-useragent-stylesheets")]
-                Resource::ServoCSS => &include_bytes!("../resources/servo.css")[..],
-                #[cfg(feature = "embed-useragent-stylesheets")]
-                Resource::PresentationalHintsCSS => {
-                    &include_bytes!("../resources/presentational-hints.css")[..]
-                }
                 Resource::HstsPreloadList => {
                     log::warn!(
                         "HSTS preload list not found, falling back to an empty list, to set this, put the list at '{}'",
