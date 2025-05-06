@@ -418,102 +418,86 @@ impl Verso {
         }
         let compositor = self.compositor.as_mut().unwrap();
 
-        let mut shutdown = false;
-
         // Handle Compositor's messages first
         log::trace!("Verso is handling Compositor messages");
 
-        let mut messages: Vec<EmbedderMsg> = vec![];
-        if compositor.receive_messages(&mut self.windows) {
-            // And then handle Embedder messages
-            log::trace!(
-                "Verso is handling Embedder messages when shutdown state is set to {:?}",
-                compositor.shutdown_state
-            );
-            while let Ok(msg) = self.embedder_receiver.try_recv() {
-                messages.push(msg);
-            }
-        }
+        compositor.receive_messages(&mut self.windows);
 
-        match compositor.shutdown_state {
-            ShutdownState::NotShuttingDown => {
-                for msg in messages {
-                    if let Some(webview_id) = Self::get_embedder_message_webview_id(&msg) {
-                        for (window, document) in self.windows.values_mut() {
-                            if window.has_webview(*webview_id) {
-                                if window.handle_servo_message(
-                                    *webview_id,
-                                    msg,
-                                    &self.constellation_sender,
-                                    &self.to_controller_sender,
-                                    self.clipboard.as_mut(),
-                                    compositor,
-                                    &mut self.bookmark_manager,
-                                ) {
-                                    let mut window = Window::new_with_compositor(
-                                        evl,
-                                        self.config.window_attributes.clone(),
-                                        compositor,
-                                    );
-                                    window.create_panel(
-                                        &self.constellation_sender,
-                                        self.config.url.clone(),
-                                    );
-                                    let webrender_document = *document;
-                                    self.windows
-                                        .insert(window.id(), (window, webrender_document));
-                                }
-                                break;
-                            }
+        // Only handle incoming embedder messages if the compositor hasn't already started shutting down.
+        while let Ok(msg) = self.embedder_receiver.try_recv() {
+            if let Some(webview_id) = Self::get_embedder_message_webview_id(&msg) {
+                if let Some((window, document_id)) = self
+                    .windows
+                    .values_mut()
+                    .find(|(window, _)| window.has_webview(*webview_id))
+                {
+                    if window.handle_servo_message(
+                        *webview_id,
+                        msg,
+                        &self.constellation_sender,
+                        &self.to_controller_sender,
+                        self.clipboard.as_mut(),
+                        compositor,
+                        &mut self.bookmark_manager,
+                    ) {
+                        let mut window = Window::new_with_compositor(
+                            evl,
+                            self.config.window_attributes.clone(),
+                            compositor,
+                        );
+                        window.create_panel(&self.constellation_sender, self.config.url.clone());
+                        let webrender_document = *document_id;
+                        self.windows
+                            .insert(window.id(), (window, webrender_document));
+                    }
+                }
+            } else {
+                // Handle message in Verso Window
+                log::trace!("Verso Window is handling Embedder message: {msg:?}");
+                match msg {
+                    EmbedderMsg::OnDevtoolsStarted(port, _token) => {
+                        if let Ok(port) = port {
+                            // We use level error by default so this won't show
+                            // log::info!("Devtools server listening on port {port}");
+                            println!("Devtools server listening on port {port}");
+                        } else {
+                            log::error!("Failed to start devtools server");
                         }
-                    } else {
-                        // Handle message in Verso Window
-                        log::trace!("Verso Window is handling Embedder message: {msg:?}");
-                        match msg {
-                            EmbedderMsg::OnDevtoolsStarted(port, _token) => {
-                                if let Ok(port) = port {
-                                    // We use level error by default so this won't show
-                                    // log::info!("Devtools server listening on port {port}");
-                                    println!("Devtools server listening on port {port}");
-                                } else {
-                                    log::error!("Failed to start devtools server");
-                                }
-                            }
-                            EmbedderMsg::RequestDevtoolsConnection(sender) => {
-                                if let Err(err) = sender.send(AllowOrDeny::Allow) {
-                                    log::error!(
-                                        "Failed to send RequestDevtoolsConnection response back: {err}"
-                                    );
-                                }
-                            }
-                            e => {
-                                log::trace!(
-                                    "Verso Window isn't supporting handling this message yet: {e:?}"
-                                )
-                            }
+                    }
+                    EmbedderMsg::RequestDevtoolsConnection(sender) => {
+                        if let Err(err) = sender.send(AllowOrDeny::Allow) {
+                            log::error!(
+                                "Failed to send RequestDevtoolsConnection response back: {err}"
+                            );
                         }
+                    }
+                    e => {
+                        log::trace!(
+                            "Verso Window isn't supporting handling this message yet: {e:?}"
+                        )
                     }
                 }
             }
-            ShutdownState::FinishedShuttingDown => {
-                log::error!("Verso shouldn't be handling messages after compositor has shut down");
+
+            if compositor.shutdown_state == ShutdownState::FinishedShuttingDown {
+                break;
             }
-            ShutdownState::ShuttingDown => {}
         }
 
-        if compositor.shutdown_state != ShutdownState::FinishedShuttingDown {
-            // Update compositor
-            compositor.perform_updates(&mut self.windows);
-        } else {
-            shutdown = true;
+        compositor.perform_updates(&mut self.windows);
+
+        if compositor.needs_repaint() {
+            if let Some(window) = self.windows.get(&compositor.current_window) {
+                window.0.request_redraw();
+            }
         }
 
         // Check if Verso need to start shutting down.
         if self.windows.is_empty() {
-            self.compositor
-                .as_mut()
-                .map(IOCompositor::start_shutting_down);
+            compositor.start_shutting_down();
         }
+
+        let shutdown = compositor.shutdown_state == ShutdownState::FinishedShuttingDown;
 
         // Check compositor status and set control flow.
         if shutdown {

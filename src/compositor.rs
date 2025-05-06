@@ -29,7 +29,7 @@ use embedder_traits::{
 use euclid::{Point2D, Scale, Size2D, Transform3D, Vector2D, vec2};
 use gleam::gl;
 use ipc_channel::ipc::{self, IpcSharedMemory};
-use log::{debug, error, trace, warn};
+use log::{debug, trace, warn};
 use profile_traits::mem::{ProcessReports, Report, ReportKind};
 use profile_traits::time::{self as profile_time, ProfilerCategory};
 use profile_traits::{mem, path, time, time_profile};
@@ -322,13 +322,13 @@ impl PipelineDetails {
         }
     }
 
-    // pub(crate) fn animations_or_animation_callbacks_running(&self) -> bool {
-    //     self.animations_running || self.animation_callbacks_running
-    // }
+    pub(crate) fn animations_or_animation_callbacks_running(&self) -> bool {
+        self.animations_running || self.animation_callbacks_running
+    }
 
-    // pub(crate) fn animation_callbacks_running(&self) -> bool {
-    //     self.animation_callbacks_running
-    // }
+    pub(crate) fn animation_callbacks_running(&self) -> bool {
+        self.animation_callbacks_running
+    }
 
     pub(crate) fn animating(&self) -> bool {
         !self.throttled && (self.animation_callbacks_running || self.animations_running)
@@ -468,15 +468,15 @@ impl IOCompositor {
         &mut self,
         msg: CompositorMsg,
         windows: &mut HashMap<WindowId, (Window, DocumentId)>,
-    ) -> bool {
+    ) {
         match self.shutdown_state {
             ShutdownState::NotShuttingDown => {}
             ShutdownState::ShuttingDown => {
                 return self.handle_browser_message_while_shutting_down(msg);
             }
             ShutdownState::FinishedShuttingDown => {
-                error!("compositor shouldn't be handling messages after shutting down");
-                return false;
+                // Messages to the compositor are ignored after shutdown is complete.
+                return;
             }
         }
 
@@ -615,9 +615,8 @@ impl IOCompositor {
 
             CompositorMsg::SendScrollNode(_webview_id, pipeline_id, point, external_scroll_id) => {
                 let pipeline_id = pipeline_id.into();
-                let pipeline_details = match self.pipeline_details.get_mut(&pipeline_id) {
-                    Some(details) => details,
-                    None => return true, // TODO: remove return true after we adapt to api based embder
+                let Some(pipeline_details) = self.pipeline_details.get_mut(&pipeline_id) else {
+                    return;
                 };
 
                 let offset = LayoutVector2D::new(point.x, point.y);
@@ -629,7 +628,7 @@ impl IOCompositor {
                     )
                 {
                     warn!("Could not scroll not with id: {external_scroll_id:?}");
-                    return true; // TODO: remove return true after we adapt to api based embder
+                    return;
                 }
 
                 let mut txn = Transaction::new();
@@ -654,42 +653,37 @@ impl IOCompositor {
                 let display_list_info = match display_list_receiver.recv() {
                     Ok(display_list_info) => display_list_info,
                     Err(error) => {
-                        // TODO: remove return true after we adapt to api based embder
                         warn!("Could not receive display list info: {error}");
-                        return true;
+                        return;
                     }
                 };
                 let display_list_info: CompositorDisplayListInfo =
                     match bincode::deserialize(&display_list_info) {
                         Ok(display_list_info) => display_list_info,
                         Err(error) => {
-                            // TODO: remove return true after we adapt to api based embder
                             warn!("Could not deserialize display list info: {error}");
-                            return true;
+                            return;
                         }
                     };
                 let items_data = match display_list_receiver.recv() {
                     Ok(display_list_data) => display_list_data,
                     Err(error) => {
-                        // TODO: remove return true after we adapt to api based embder
                         warn!("Could not receive WebRender display list items data: {error}");
-                        return true;
+                        return;
                     }
                 };
                 let cache_data = match display_list_receiver.recv() {
                     Ok(display_list_data) => display_list_data,
                     Err(error) => {
-                        // TODO: remove return true after we adapt to api based embder
                         warn!("Could not receive WebRender display list cache data: {error}");
-                        return true;
+                        return;
                     }
                 };
                 let spatial_tree = match display_list_receiver.recv() {
                     Ok(display_list_data) => display_list_data,
                     Err(error) => {
-                        // TODO: remove return true after we adapt to api based embder
                         warn!("Could not receive WebRender display list spatial tree: {error}.");
-                        return true;
+                        return;
                     }
                 };
                 let built_display_list = BuiltDisplayList::from_data(
@@ -843,8 +837,6 @@ impl IOCompositor {
                 }
             }
         }
-
-        true
     }
 
     /// Handle messages sent to the compositor during the shutdown process. In general,
@@ -856,7 +848,7 @@ impl IOCompositor {
     /// When that involves generating WebRender ids, our approach here is to simply
     /// generate them, but assume they will never be used, since once shutting down the
     /// compositor no longer does any WebRender frame generation.
-    fn handle_browser_message_while_shutting_down(&mut self, msg: CompositorMsg) -> bool {
+    fn handle_browser_message_while_shutting_down(&mut self, msg: CompositorMsg) {
         match msg {
             CompositorMsg::PipelineExited(_webview_id, pipeline_id, sender) => {
                 debug!("Compositor got pipeline exited: {:?}", pipeline_id);
@@ -902,7 +894,6 @@ impl IOCompositor {
                 debug!("Ignoring message ({:?} while shutting down", msg);
             }
         }
-        true
     }
 
     /// Queue a new frame in the transaction and increase the pending frames count.
@@ -1824,26 +1815,17 @@ impl IOCompositor {
     }
 
     // Check if any pipelines currently have active animations or animation callbacks.
-    fn animations_active(&self) -> bool {
-        for details in self.pipeline_details.values() {
-            // If animations are currently running, then don't bother checking
-            // with the constellation if the output image is stable.
-            if details.animations_running {
-                return true;
-            }
-            if details.animation_callbacks_running {
-                return true;
-            }
-        }
-
-        false
+    fn animations_or_animation_callbacks_running(&self) -> bool {
+        self.pipeline_details
+            .values()
+            .any(PipelineDetails::animations_or_animation_callbacks_running)
     }
 
     /// Returns true if any animation callbacks (ie `requestAnimationFrame`) are waiting for a response.
     fn animation_callbacks_active(&self) -> bool {
         self.pipeline_details
             .values()
-            .any(|details| details.animation_callbacks_running)
+            .any(PipelineDetails::animation_callbacks_running)
     }
 
     /// Query the constellation to see if the current compositor
@@ -1938,7 +1920,7 @@ impl IOCompositor {
             // The current image may be ready to output. However, if there are animations active,
             // tick those instead and continue waiting for the image output to be stable AND
             // all active animations to complete.
-            if self.animations_active() {
+            if self.animations_or_animation_callbacks_running() {
                 self.process_animations(false);
                 return Err(UnableToComposite::NotReadyToPaintImage(
                     NotReadyToPaint::AnimationsActive,
@@ -1987,10 +1969,7 @@ impl IOCompositor {
     }
 
     /// Receive and handle compositor messages.
-    pub fn receive_messages(
-        &mut self,
-        windows: &mut HashMap<WindowId, (Window, DocumentId)>,
-    ) -> bool {
+    pub fn receive_messages(&mut self, windows: &mut HashMap<WindowId, (Window, DocumentId)>) {
         // Check for new messages coming from the other threads in the system.
         let mut compositor_messages = vec![];
         let mut found_recomposite_msg = false;
@@ -2009,11 +1988,12 @@ impl IOCompositor {
             }
         }
         for msg in compositor_messages {
-            if !self.handle_browser_message(msg, windows) {
-                return false;
+            self.handle_browser_message(msg, windows);
+
+            if self.shutdown_state == ShutdownState::FinishedShuttingDown {
+                return;
             }
         }
-        true
     }
 
     /// Perform composition and related actions.
