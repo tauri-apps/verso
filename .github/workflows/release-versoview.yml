@@ -37,7 +37,7 @@ jobs:
             python3-mako
 
       - name: Build
-        run: cargo build --features embed-useragent-stylesheets --release
+        run: cargo build --release
 
       - name: Make archive
         run: cd ./target/release && tar -czvf verso-x86_64-unknown-linux-gnu.tar.gz versoview
@@ -70,7 +70,7 @@ jobs:
           scoop install cmake
 
       - name: Build
-        run: cargo build --features embed-useragent-stylesheets --release
+        run: cargo build --release
 
       - name: Make archive
         working-directory: ./target/release
@@ -114,7 +114,7 @@ jobs:
         run: rustup target add ${{ matrix.target }}
 
       - name: Build
-        run: cargo build --target ${{ matrix.target }} --features embed-useragent-stylesheets --release
+        run: cargo build --target ${{ matrix.target }} --release
 
       - name: Make archive
         working-directory: ./target/${{ matrix.target }}/release
