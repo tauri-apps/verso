@@ -480,34 +480,6 @@ impl Window {
 
                 /* handle mouse events */
 
-                let button: MouseButton = match button {
-                    winit::event::MouseButton::Left => MouseButton::Left,
-                    winit::event::MouseButton::Right => MouseButton::Right,
-                    winit::event::MouseButton::Middle => MouseButton::Middle,
-                    _ => {
-                        log::trace!(
-                            "Verso Window isn't supporting this mouse button yet: {button:?}"
-                        );
-                        return;
-                    }
-                };
-
-                let event: MouseButtonEvent = match state {
-                    ElementState::Pressed => MouseButtonEvent {
-                        point,
-                        action: MouseButtonAction::Down,
-                        button,
-                    },
-                    ElementState::Released => {
-                        self.resizing = false;
-                        MouseButtonEvent {
-                            point,
-                            action: MouseButtonAction::Up,
-                            button,
-                        }
-                    }
-                };
-
                 let webview_id = match self.focused_webview_id {
                     Some(webview_id) => webview_id,
                     None => {
@@ -515,27 +487,31 @@ impl Window {
                         return;
                     }
                 };
+
+                let button: MouseButton = match button {
+                    winit::event::MouseButton::Left => MouseButton::Left,
+                    winit::event::MouseButton::Right => MouseButton::Right,
+                    winit::event::MouseButton::Middle => MouseButton::Middle,
+                    winit::event::MouseButton::Back => MouseButton::Back,
+                    winit::event::MouseButton::Forward => MouseButton::Forward,
+                    winit::event::MouseButton::Other(value) => MouseButton::Other(*value),
+                };
+
+                let action = match state {
+                    ElementState::Pressed => MouseButtonAction::Down,
+                    ElementState::Released => MouseButtonAction::Up,
+                };
+
                 forward_input_event(
                     compositor,
                     webview_id,
                     sender,
-                    InputEvent::MouseButton(event),
-                );
-
-                // Winit didn't send click event, so we send it after mouse up
-                if *state == ElementState::Released {
-                    let event: MouseButtonEvent = MouseButtonEvent {
+                    InputEvent::MouseButton(MouseButtonEvent {
                         point,
-                        action: MouseButtonAction::Click,
+                        action,
                         button,
-                    };
-                    forward_input_event(
-                        compositor,
-                        webview_id,
-                        sender,
-                        InputEvent::MouseButton(event),
-                    );
-                }
+                    }),
+                );
             }
             WindowEvent::PinchGesture { delta, .. } => {
                 compositor.on_zoom_window_event(1.0 + *delta as f32, self);
