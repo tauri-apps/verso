@@ -2,7 +2,7 @@
 members = ["verso", "versoview_messages", "versoview_build"]
 
 [workspace.package]
-version = "0.0.3"
+version = "0.0.4"
 edition = "2024"
 license = "Apache-2.0 OR MIT"
 homepage = "https://versotile.org/verso"
@@ -23,7 +23,6 @@ dpi = { version = "0.1", features = ["serde"] }
 name = "versoview"
 version.workspace = true
 edition.workspace = true
-authors = ["Wu Yu Wei"]
 license.workspace = true
 description = "An innovative web browser"
 readme = "README.md"
@@ -90,7 +89,7 @@ log = { workspace = true }
 raw-window-handle = { version = "0.6", features = ["std"] }
 rustls = { version = "0.23", default-features = false, features = ["aws-lc-rs"] }
 sparkle = "0.1.26"
-thiserror = "1.0"
+thiserror = "2"
 winit = { version = "0.30", features = ["rwh_06"] }
 dpi = { workspace = true }
 url = { workspace = true }
