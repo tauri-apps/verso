@@ -15,6 +15,11 @@ fn main() {
             true
         })
         .unwrap();
+    controller
+        .on_close_requested(|exit_request_api| {
+            exit_request_api.prevent_exit();
+        })
+        .unwrap();
     sleep(Duration::from_secs(10));
     dbg!(
         controller

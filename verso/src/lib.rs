@@ -25,9 +25,22 @@ type ResponseFunction = Box<dyn FnOnce(Option<http::Response<Vec<u8>>>) + Send>;
 type Listener<T> = Arc<Mutex<Option<T>>>;
 type ResponseListener<T> = Arc<Mutex<HashMap<uuid::Uuid, T>>>;
 
+/// API exposed on the `ExitRequested` event.
+#[derive(Debug, Default)]
+pub struct ExitRequestApi {
+    should_exit: bool,
+}
+
+impl ExitRequestApi {
+    /// Reject this exit request
+    pub fn prevent_exit(&mut self) {
+        self.should_exit = false;
+    }
+}
+
 #[derive(Default)]
 struct EventListeners {
-    on_close_requested: Listener<Box<dyn Fn() + Send + 'static>>,
+    on_close_requested: Listener<Box<dyn Fn(&mut ExitRequestApi) + Send + 'static>>,
     on_navigation_starting: Listener<Box<dyn Fn(url::Url) -> bool + Send + 'static>>,
     on_web_resource_requested:
         Listener<Box<dyn Fn(http::Request<Vec<u8>>, ResponseFunction) + Send + 'static>>,
@@ -94,7 +107,15 @@ impl VersoviewController {
                 Ok(message) => match message {
                     ToControllerMessage::OnCloseRequested => {
                         if let Some(ref callback) = *on_close_requested.lock().unwrap() {
-                            callback();
+                            let mut exit_request_api = ExitRequestApi::default();
+                            callback(&mut exit_request_api);
+                            if let Err(error) = to_verso_sender.send(
+                                ToVersoMessage::Exit,
+                            ) {
+                                error!(
+                                    "Error while sending back ToVersoMessage::Exit result: {error}"
+                                );
+                            }
                         }
                     }
                     ToControllerMessage::OnNavigationStarting(id, url) => {
@@ -186,11 +207,24 @@ impl VersoviewController {
     }
 
     /// Listen on close requested from the OS,
-    /// if you decide to use it, verso will not close the window by itself anymore,
-    /// so make sure you handle it properly by either do your own logic or call [`Self::exit`] as a fallback
+    /// the callback function takes a parameter [`ExitRequestApi`],
+    /// to reject this close request, call [`ExitRequestApi::prevent_exit`] on it
+    ///
+    /// ### Example
+    ///
+    /// ```no_run
+    /// let controller = verso::VersoBuilder::new()
+    ///     .build("versoview", url::Url::parse("https://example.com").unwrap());
+    /// controller
+    ///     .on_close_requested(|prevent_exit_api| {
+    ///         prevent_exit_api.prevent_exit();
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
     pub fn on_close_requested(
         &self,
-        callback: impl Fn() + Send + 'static,
+        callback: impl Fn(&mut ExitRequestApi) + Send + 'static,
     ) -> Result<(), Box<ipc_channel::ErrorKind>> {
         let old_listener = self
             .event_listeners
