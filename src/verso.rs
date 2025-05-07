@@ -471,6 +471,9 @@ impl Verso {
                             );
                         }
                     }
+                    EmbedderMsg::ShutdownComplete => {
+                        compositor.finish_shutting_down();
+                    }
                     e => {
                         log::trace!(
                             "Verso Window isn't supporting handling this message yet: {e:?}"
@@ -558,22 +561,34 @@ impl Verso {
 
     /// Request Verso to redraw. It will queue a redraw event on current focused window.
     pub fn request_redraw(&mut self, evl: &ActiveEventLoop) {
-        if let Some(compositor) = &mut self.compositor {
-            if let Some(window) = self.windows.get(&compositor.current_window) {
-                // evl.set_control_flow(ControlFlow::Poll);
-                window.0.request_redraw();
-            } else {
-                self.handle_servo_messages(evl);
+        let Some(compositor) = &mut self.compositor else {
+            return;
+        };
+
+        if let Some((window, _)) = self.windows.get(&compositor.current_window) {
+            // evl.set_control_flow(ControlFlow::Poll);
+            window.request_redraw();
+
+            // Wait for `request_redraw` to trigger the next event loop if the window is visible
+            if window.window.is_visible().unwrap_or(true) {
+                return;
             }
         }
+
+        self.handle_servo_messages(evl);
     }
 
     /// Handle message came from webview controller.
-    pub fn handle_incoming_webview_message(&mut self, message: ToVersoMessage) {
+    pub fn handle_incoming_webview_message(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        message: ToVersoMessage,
+    ) {
         match message {
             ToVersoMessage::Exit => {
                 if let Some(compositor) = &mut self.compositor {
                     compositor.start_shutting_down();
+                    self.handle_servo_messages(event_loop);
                 }
             }
             ToVersoMessage::ListenToOnCloseRequested => {

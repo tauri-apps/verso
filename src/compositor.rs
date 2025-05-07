@@ -444,10 +444,10 @@ impl IOCompositor {
         }
 
         self.shutdown_state = ShutdownState::ShuttingDown;
-        self.finish_shutting_down();
     }
 
-    fn finish_shutting_down(&mut self) {
+    /// Finish shutting down when we receive `EmbedderMsg::ShutdownComplete`
+    pub fn finish_shutting_down(&mut self) {
         debug!("Compositor received message that constellation shutdown is complete");
 
         // Drain compositor port, sometimes messages contain channels that are blocking
