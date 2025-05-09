@@ -19,7 +19,7 @@ use std::{
     time::Instant,
 };
 
-const VERSO_VERSION: &str = env!("CARGO_PKG_VERSION");
+pub const VERSO_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Decompress the archive to the output directory, this should resulting in a versoview(.exe) in that directory
 pub fn decompress_archive<P1: AsRef<Path>, P2: AsRef<Path>>(
