@@ -13,7 +13,6 @@ type SerializedPipelineId = Vec<u8>;
 
 /// Message sent from the controller to versoview
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub enum ToVersoMessage {
     /// Initial configs for versoview
     /// this will be the first message sent to Verso once we received the sender from [`ToControllerMessage::SetToVersoSender`]
@@ -38,6 +37,8 @@ pub enum ToVersoMessage {
     ListenToWebResourceRequests,
     /// Response to a [`ToControllerMessage::OnWebResourceRequested`] message from versoview
     WebResourceRequestResponse(WebResourceRequestResponse),
+    /// Sets the window title
+    SetTitle(String),
     /// Sets the webview window's size
     SetSize(Size),
     /// Sets the webview window's position
@@ -56,6 +57,8 @@ pub enum ToVersoMessage {
     StartDragging,
     /// Bring the window to the front, and capture input focus
     Focus,
+    /// Get the title of the window, need a response with [`ToControllerMessage::GetTitleResponse`]
+    GetTitle(uuid::Uuid),
     /// Get the window's size, need a response with [`ToControllerMessage::GetSizeResponse`]
     GetSize(uuid::Uuid, SizeType),
     /// Get the window's position, need a response with [`ToControllerMessage::GetPositionResponse`]
@@ -88,7 +91,6 @@ pub enum SizeType {
 
 /// Message sent from versoview to the controller
 #[derive(Debug, Serialize, Deserialize)]
-#[non_exhaustive]
 pub enum ToControllerMessage {
     /// IPC sender for the controller to send commands to versoview,
     /// this will be the first message sent to the controller once connected
@@ -97,6 +99,8 @@ pub enum ToControllerMessage {
     OnNavigationStarting(SerializedPipelineId, url::Url),
     /// Sent on a new web resource request, need a response with [`ToVersoMessage::WebResourceRequestResponse`]
     OnWebResourceRequested(WebResourceRequest),
+    /// Response to a [`ToVersoMessage::GetTitle`]
+    GetTitleResponse(uuid::Uuid, String),
     /// Response to a [`ToVersoMessage::GetSize`]
     GetSizeResponse(uuid::Uuid, PhysicalSize<u32>),
     /// Response to a [`ToVersoMessage::GetPosition`]

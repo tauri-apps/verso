@@ -673,6 +673,11 @@ impl Verso {
                     }
                 }
             }
+            ToVersoMessage::SetTitle(title) => {
+                if let Some(window) = self.first_window() {
+                    let _ = window.window.set_title(&title);
+                }
+            }
             ToVersoMessage::SetSize(size) => {
                 if let Some(window) = self.first_window() {
                     let _ = window.window.request_inner_size(size);
@@ -722,6 +727,15 @@ impl Verso {
             ToVersoMessage::Focus => {
                 if let Some(window) = self.first_window() {
                     window.window.focus_window();
+                }
+            }
+            ToVersoMessage::GetTitle(id) => {
+                if let Some(window) = self.first_window() {
+                    if let Err(error) = self.to_controller_sender.as_ref().unwrap().send(
+                        ToControllerMessage::GetTitleResponse(id, window.window.title()),
+                    ) {
+                        log::error!("Verso failed to send GetTitleReponse to controller: {error}")
+                    }
                 }
             }
             ToVersoMessage::GetSize(id, size_type) => {
@@ -840,7 +854,11 @@ impl Verso {
                     }
                 }
             }
-            _ => {}
+            ToVersoMessage::SetConfig(..) => {
+                log::error!(
+                    "`ToVersoMessage::SetConfig` should not be received after the initial setup"
+                )
+            }
         }
     }
 

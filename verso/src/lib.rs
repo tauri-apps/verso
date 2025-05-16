@@ -31,6 +31,7 @@ struct EventListeners {
     on_navigation_starting: Listener<Box<dyn Fn(url::Url) -> bool + Send + 'static>>,
     on_web_resource_requested:
         Listener<Box<dyn Fn(http::Request<Vec<u8>>, ResponseFunction) + Send + 'static>>,
+    title_response: ResponseListener<MpscSender<String>>,
     size_response: ResponseListener<MpscSender<PhysicalSize<u32>>>,
     position_response: ResponseListener<MpscSender<Option<PhysicalPosition<i32>>>>,
     maximized_response: ResponseListener<MpscSender<bool>>,
@@ -79,6 +80,7 @@ impl VersoviewController {
         let on_close_requested = event_listeners.on_close_requested.clone();
         let on_navigation_starting = event_listeners.on_navigation_starting.clone();
         let on_web_resource_requested = event_listeners.on_web_resource_requested.clone();
+        let title_response = event_listeners.title_response.clone();
         let size_response = event_listeners.size_response.clone();
         let position_response = event_listeners.position_response.clone();
         let minimized_response = event_listeners.minimized_response.clone();
@@ -124,6 +126,11 @@ impl VersoviewController {
                             );
                         }
                     }
+                    ToControllerMessage::GetTitleResponse(id, title) => {
+                        if let Some(sender) = title_response.lock().unwrap().get(&id).take() {
+                            sender.send(title).unwrap();
+                        }
+                    }
                     ToControllerMessage::GetSizeResponse(id, size) => {
                         if let Some(sender) = size_response.lock().unwrap().get(&id).take() {
                             sender.send(size).unwrap();
@@ -164,7 +171,9 @@ impl VersoviewController {
                             sender.send(url).unwrap();
                         }
                     }
-                    _ => {}
+                    ToControllerMessage::SetToVersoSender(..) => {
+                        log::error!("`ToControllerMessage::SetToVersoSender` should not be received after the initial setup")
+                    }
                 },
                 Err(e) => error!("Error while receiving VersoMessage: {e}"),
             }),
@@ -257,6 +266,12 @@ impl VersoviewController {
         Ok(())
     }
 
+    /// Sets the window title
+    pub fn set_title<S: Into<String>>(&self, title: S) -> Result<(), Box<ipc_channel::ErrorKind>> {
+        self.sender.send(ToVersoMessage::SetTitle(title.into()))?;
+        Ok(())
+    }
+
     /// Sets the webview window's size
     pub fn set_size<S: Into<Size>>(&self, size: S) -> Result<(), Box<ipc_channel::ErrorKind>> {
         self.sender.send(ToVersoMessage::SetSize(size.into()))?;
@@ -318,6 +333,26 @@ impl VersoviewController {
     pub fn focus(&self) -> Result<(), Box<ipc_channel::ErrorKind>> {
         self.sender.send(ToVersoMessage::Focus)?;
         Ok(())
+    }
+
+    /// Get the title of the window
+    pub fn get_title(&self) -> Result<String, Box<ipc_channel::ErrorKind>> {
+        let id = uuid::Uuid::new_v4();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.event_listeners
+            .title_response
+            .lock()
+            .unwrap()
+            .insert(id, sender);
+        if let Err(error) = self.sender.send(ToVersoMessage::GetTitle(id)) {
+            self.event_listeners
+                .title_response
+                .lock()
+                .unwrap()
+                .remove(&id);
+            return Err(error);
+        };
+        Ok(receiver.recv().unwrap())
     }
 
     /// Get the window's size
