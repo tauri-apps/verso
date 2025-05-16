@@ -675,7 +675,7 @@ impl Verso {
             }
             ToVersoMessage::SetTitle(title) => {
                 if let Some(window) = self.first_window() {
-                    let _ = window.window.set_title(&title);
+                    window.window.set_title(&title);
                 }
             }
             ToVersoMessage::SetSize(size) => {
