@@ -15,7 +15,7 @@ use std::{
 };
 pub use versoview_messages::{
     ConfigFromController as VersoviewSettings, CustomProtocol, CustomProtocolBuilder, Icon,
-    ProfilerSettings, UserScript,
+    ProfilerSettings, UserScript, WindowLevel,
 };
 use versoview_messages::{
     PositionType, SizeType, ToControllerMessage, ToVersoMessage, WebResourceRequestResponse,

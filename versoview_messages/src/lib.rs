@@ -118,10 +118,6 @@ pub enum ToControllerMessage {
 /// Configuration of Verso instance.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ConfigFromController {
-    /// URL to load initially.
-    pub url: Option<url::Url>,
-    /// Should launch without or without control panel
-    pub with_panel: bool,
     /// Window size for the initial winit window
     pub inner_size: Option<Size>,
     /// Window position for the initial winit window
@@ -142,6 +138,13 @@ pub struct ConfigFromController {
     pub title: Option<String>,
     /// Window icon of the initial winit window.
     pub icon: Option<Icon>,
+    /// The window level for the initial winit window
+    pub window_level: WindowLevel,
+
+    /// URL to load initially.
+    pub url: Option<url::Url>,
+    /// Should launch without or without control panel
+    pub with_panel: bool,
     /// Port number to start a server to listen to remote Firefox devtools connections. 0 for random port.
     pub devtools_port: Option<u16>,
     /// Servo time profile settings
@@ -162,18 +165,20 @@ pub struct ConfigFromController {
 impl Default for ConfigFromController {
     fn default() -> Self {
         Self {
-            url: None,
-            with_panel: false,
             inner_size: None,
             position: None,
             maximized: false,
             visible: true,
+            fullscreen: false,
             focused: true,
             decorated: false,
             transparent: true,
             title: None,
             icon: None,
-            fullscreen: false,
+            window_level: WindowLevel::Normal,
+
+            url: None,
+            with_panel: false,
             devtools_port: None,
             profiler_settings: None,
             user_agent: None,
@@ -193,6 +198,27 @@ pub struct Icon {
     pub width: u32,
     /// Icon height.
     pub height: u32,
+}
+
+/// A window level groups windows with respect to their z-position.
+///
+/// The relative ordering between windows in different window levels is fixed.
+/// The z-order of a window within the same window level may change dynamically on user interaction.
+///
+/// ## Platform-specific
+///
+/// - **Wayland:** Unsupported.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub enum WindowLevel {
+    /// The default.
+    #[default]
+    Normal,
+    /// The window will always be on top of normal windows.
+    AlwaysOnTop,
+    /// The window will always be below normal windows.
+    ///
+    /// This is useful for a widget-based app.
+    AlwaysOnBottom,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

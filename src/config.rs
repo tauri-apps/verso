@@ -349,6 +349,13 @@ impl Config {
         });
         window_attributes = window_attributes.with_visible(config.visible);
         window_attributes = window_attributes.with_active(config.focused);
+        window_attributes = window_attributes.with_window_level(match config.window_level {
+            versoview_messages::WindowLevel::Normal => winit::window::WindowLevel::Normal,
+            versoview_messages::WindowLevel::AlwaysOnTop => winit::window::WindowLevel::AlwaysOnTop,
+            versoview_messages::WindowLevel::AlwaysOnBottom => {
+                winit::window::WindowLevel::AlwaysOnBottom
+            }
+        });
 
         let profiler_settings =
             config
