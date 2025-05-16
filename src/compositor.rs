@@ -24,7 +24,7 @@ use dpi::PhysicalSize;
 use embedder_traits::{
     AnimationState, CompositorHitTestResult, Cursor, InputEvent, MouseButton, MouseButtonAction,
     MouseButtonEvent, MouseMoveEvent, TouchEvent, TouchEventType, TouchId, UntrustedNodeAddress,
-    ViewportDetails,
+    ViewportDetails, WheelDelta, WheelEvent, WheelMode,
 };
 use euclid::{Point2D, Scale, Size2D, Transform3D, Vector2D, vec2};
 use gleam::gl;
@@ -835,6 +835,28 @@ impl IOCompositor {
                 {
                     warn!("Sending response to get screen size failed ({error:?}).");
                 }
+            }
+
+            CompositorMsg::WebDriverWheelScrollEvent(webview_id, x, y, delta_x, delta_y) => {
+                let delta = WheelDelta {
+                    x: delta_x,
+                    y: delta_y,
+                    z: 0.0,
+                    mode: WheelMode::DeltaPixel,
+                };
+                let dppx = self.device_pixels_per_page_pixel();
+                let point = dppx.transform_point(Point2D::new(x, y));
+                let scroll_delta =
+                    dppx.transform_vector(Vector2D::new(delta_x as f32, delta_y as f32));
+
+                let scroll_location =
+                    ScrollLocation::Delta(LayoutVector2D::from_untyped(scroll_delta.to_untyped()));
+                let cursor = DeviceIntPoint::new(point.x as i32, point.y as i32);
+                self.dispatch_input_event(
+                    webview_id,
+                    InputEvent::Wheel(WheelEvent { delta, point }),
+                );
+                self.on_scroll_window_event(scroll_location, cursor);
             }
         }
     }
