@@ -298,6 +298,16 @@ impl VersoviewController {
         Ok(())
     }
 
+    /// Change the window level
+    pub fn set_window_level(
+        &self,
+        window_level: WindowLevel,
+    ) -> Result<(), Box<ipc_channel::ErrorKind>> {
+        self.sender
+            .send(ToVersoMessage::SetWindowLevel(window_level))?;
+        Ok(())
+    }
+
     /// Moves the window with the left mouse button until the button is released
     pub fn start_dragging(&self) -> Result<(), Box<ipc_channel::ErrorKind>> {
         self.sender.send(ToVersoMessage::StartDragging)?;

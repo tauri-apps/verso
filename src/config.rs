@@ -349,13 +349,8 @@ impl Config {
         });
         window_attributes = window_attributes.with_visible(config.visible);
         window_attributes = window_attributes.with_active(config.focused);
-        window_attributes = window_attributes.with_window_level(match config.window_level {
-            versoview_messages::WindowLevel::Normal => winit::window::WindowLevel::Normal,
-            versoview_messages::WindowLevel::AlwaysOnTop => winit::window::WindowLevel::AlwaysOnTop,
-            versoview_messages::WindowLevel::AlwaysOnBottom => {
-                winit::window::WindowLevel::AlwaysOnBottom
-            }
-        });
+        window_attributes =
+            window_attributes.with_window_level(to_winit_window_level(config.window_level));
 
         let profiler_settings =
             config
@@ -598,4 +593,16 @@ fn default_user_agent_string() -> &'static str {
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Servo/1.0 Firefox/111.0";
 
     UA_STRING
+}
+
+pub(crate) fn to_winit_window_level(
+    window_level: versoview_messages::WindowLevel,
+) -> winit::window::WindowLevel {
+    match window_level {
+        versoview_messages::WindowLevel::Normal => winit::window::WindowLevel::Normal,
+        versoview_messages::WindowLevel::AlwaysOnTop => winit::window::WindowLevel::AlwaysOnTop,
+        versoview_messages::WindowLevel::AlwaysOnBottom => {
+            winit::window::WindowLevel::AlwaysOnBottom
+        }
+    }
 }

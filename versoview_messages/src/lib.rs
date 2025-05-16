@@ -50,6 +50,8 @@ pub enum ToVersoMessage {
     SetFullscreen(bool),
     /// Show or hide the window
     SetVisible(bool),
+    /// Show or hide the window
+    SetWindowLevel(WindowLevel),
     /// Moves the window with the left mouse button until the button is released
     StartDragging,
     /// Bring the window to the front, and capture input focus

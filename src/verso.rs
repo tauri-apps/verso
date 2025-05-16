@@ -46,7 +46,7 @@ use winit::{
 use crate::{
     bookmark::BookmarkManager,
     compositor::{IOCompositor, InitialCompositorState, ShutdownState},
-    config::{Config, parse_cli_args},
+    config::{Config, parse_cli_args, to_winit_window_level},
     webview::execute_script,
     window::Window,
 };
@@ -705,6 +705,13 @@ impl Verso {
             ToVersoMessage::SetVisible(visible) => {
                 if let Some(window) = self.first_window() {
                     window.window.set_visible(visible);
+                }
+            }
+            ToVersoMessage::SetWindowLevel(window_level) => {
+                if let Some(window) = self.first_window() {
+                    window
+                        .window
+                        .set_window_level(to_winit_window_level(window_level));
                 }
             }
             ToVersoMessage::StartDragging => {
