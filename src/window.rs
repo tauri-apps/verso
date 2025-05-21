@@ -648,6 +648,12 @@ impl Window {
                 }
                 forward_input_event(compositor, webview_id, sender, InputEvent::Keyboard(event));
             }
+            WindowEvent::ThemeChanged(theme) => {
+                let _ = sender.send(EmbedderToConstellationMessage::ThemeChange(match theme {
+                    winit::window::Theme::Light => embedder_traits::Theme::Light,
+                    winit::window::Theme::Dark => embedder_traits::Theme::Dark,
+                }));
+            }
             e => log::trace!("Verso Window isn't supporting this window event yet: {e:?}"),
         }
     }
