@@ -583,25 +583,30 @@ impl IOCompositor {
                 }
             }
 
-            CompositorMsg::WebDriverMouseButtonEvent(webview_id, action, button, x, y) => {
+            CompositorMsg::WebDriverMouseButtonEvent(
+                webview_id,
+                action,
+                button,
+                x,
+                y,
+                webdriver_id,
+            ) => {
                 let dppx = self.device_pixels_per_page_pixel();
                 let point = dppx.transform_point(Point2D::new(x, y));
                 self.dispatch_input_event(
                     webview_id,
-                    InputEvent::MouseButton(MouseButtonEvent {
-                        point,
-                        action,
-                        button,
-                    }),
+                    InputEvent::MouseButton(MouseButtonEvent::new(action, button, point))
+                        .with_webdriver_message_id(Some(webdriver_id)),
                 );
             }
 
-            CompositorMsg::WebDriverMouseMoveEvent(webview_id, x, y) => {
+            CompositorMsg::WebDriverMouseMoveEvent(webview_id, x, y, webdriver_id) => {
                 let dppx = self.device_pixels_per_page_pixel();
                 let point = dppx.transform_point(Point2D::new(x, y));
                 self.dispatch_input_event(
                     webview_id,
-                    InputEvent::MouseMove(MouseMoveEvent { point }),
+                    InputEvent::MouseMove(MouseMoveEvent::new(point))
+                        .with_webdriver_message_id(Some(webdriver_id)),
                 );
             }
 
@@ -1540,30 +1545,29 @@ impl IOCompositor {
     /// <http://w3c.github.io/touch-events/#mouse-events>
     fn simulate_mouse_click(&mut self, webview_id: WebViewId, point: DevicePoint) {
         let button = MouseButton::Left;
-        self.dispatch_input_event(webview_id, InputEvent::MouseMove(MouseMoveEvent { point }));
         self.dispatch_input_event(
             webview_id,
-            InputEvent::MouseButton(MouseButtonEvent {
-                button,
-                action: MouseButtonAction::Down,
-                point,
-            }),
+            InputEvent::MouseMove(MouseMoveEvent::new(point)),
         );
         self.dispatch_input_event(
             webview_id,
-            InputEvent::MouseButton(MouseButtonEvent {
+            InputEvent::MouseButton(MouseButtonEvent::new(
+                MouseButtonAction::Down,
                 button,
-                action: MouseButtonAction::Up,
                 point,
-            }),
+            )),
         );
         self.dispatch_input_event(
             webview_id,
-            InputEvent::MouseButton(MouseButtonEvent {
+            InputEvent::MouseButton(MouseButtonEvent::new(MouseButtonAction::Up, button, point)),
+        );
+        self.dispatch_input_event(
+            webview_id,
+            InputEvent::MouseButton(MouseButtonEvent::new(
+                MouseButtonAction::Click,
                 button,
-                action: MouseButtonAction::Click,
                 point,
-            }),
+            )),
         );
     }
 
