@@ -236,7 +236,7 @@ pub enum WindowLevel {
     AlwaysOnBottom,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
 pub enum Theme {
     #[default]
     Light,
