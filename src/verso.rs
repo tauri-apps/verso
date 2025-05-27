@@ -849,13 +849,8 @@ impl Verso {
                         ToControllerMessage::GetThemeResponse(
                             id,
                             match window.window.theme() {
-                                Some(winit::window::Theme::Light) => {
-                                    Some(versoview_messages::Theme::Light)
-                                }
-                                Some(winit::window::Theme::Dark) => {
-                                    Some(versoview_messages::Theme::Dark)
-                                }
-                                None => None,
+                                Some(winit::window::Theme::Dark) => versoview_messages::Theme::Dark,
+                                _ => versoview_messages::Theme::Light,
                             },
                         ),
                     ) {

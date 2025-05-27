@@ -39,7 +39,7 @@ struct EventListeners {
     fullscreen_response: ResponseListener<bool>,
     visible_response: ResponseListener<bool>,
     scale_factor_response: ResponseListener<f64>,
-    theme_response: ResponseListener<Option<Theme>>,
+    theme_response: ResponseListener<Theme>,
     get_url_response: ResponseListener<url::Url>,
 }
 
@@ -443,7 +443,7 @@ impl VersoviewController {
     }
 
     /// Get the current theme of the window
-    pub fn get_theme(&self) -> Result<Option<Theme>, Box<ipc_channel::ErrorKind>> {
+    pub fn get_theme(&self) -> Result<Theme, Box<ipc_channel::ErrorKind>> {
         self.get_response(&self.event_listeners.theme_response, |id| {
             ToVersoMessage::GetTheme(id)
         })

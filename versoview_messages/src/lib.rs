@@ -120,7 +120,7 @@ pub enum ToControllerMessage {
     /// Response to a [`ToVersoMessage::GetScaleFactor`]
     GetScaleFactorResponse(uuid::Uuid, f64),
     /// Response to a [`ToVersoMessage::GetTheme`]
-    GetThemeResponse(uuid::Uuid, Option<Theme>),
+    GetThemeResponse(uuid::Uuid, Theme),
     /// Response to a [`ToVersoMessage::GetCurrentUrl`]
     GetCurrentUrlResponse(uuid::Uuid, url::Url),
     /// Verso have recieved a close request from the OS
