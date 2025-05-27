@@ -53,6 +53,8 @@ pub enum ToVersoMessage {
     SetVisible(bool),
     /// Show or hide the window
     SetWindowLevel(WindowLevel),
+    /// Sets the theme
+    SetTheme(Option<Theme>),
     /// Moves the window with the left mouse button until the button is released
     StartDragging,
     /// Bring the window to the front, and capture input focus
@@ -73,6 +75,8 @@ pub enum ToVersoMessage {
     GetVisible(uuid::Uuid),
     /// Get the scale factor of the window, need a response with [`ToControllerMessage::GetScaleFactorResponse`]
     GetScaleFactor(uuid::Uuid),
+    /// Get the current theme of the window, need a response with [`ToControllerMessage::GetThemeResponse`]
+    GetTheme(uuid::Uuid),
     /// Get the current URL of the webview, need a response with [`ToControllerMessage::GetCurrentUrlResponse`]
     GetCurrentUrl(uuid::Uuid),
 }
@@ -115,6 +119,8 @@ pub enum ToControllerMessage {
     GetVisibleResponse(uuid::Uuid, bool),
     /// Response to a [`ToVersoMessage::GetScaleFactor`]
     GetScaleFactorResponse(uuid::Uuid, f64),
+    /// Response to a [`ToVersoMessage::GetTheme`]
+    GetThemeResponse(uuid::Uuid, Option<Theme>),
     /// Response to a [`ToVersoMessage::GetCurrentUrl`]
     GetCurrentUrlResponse(uuid::Uuid, url::Url),
     /// Verso have recieved a close request from the OS
@@ -146,6 +152,8 @@ pub struct ConfigFromController {
     pub icon: Option<Icon>,
     /// The window level for the initial winit window
     pub window_level: WindowLevel,
+    /// The prefered theme for the initial winit window
+    pub theme: Option<Theme>,
 
     /// URL to load initially.
     pub url: Option<url::Url>,
@@ -182,6 +190,7 @@ impl Default for ConfigFromController {
             title: None,
             icon: None,
             window_level: WindowLevel::Normal,
+            theme: None,
 
             url: None,
             with_panel: false,
@@ -225,6 +234,13 @@ pub enum WindowLevel {
     ///
     /// This is useful for a widget-based app.
     AlwaysOnBottom,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub enum Theme {
+    #[default]
+    Light,
+    Dark,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

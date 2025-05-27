@@ -104,17 +104,15 @@ impl Window {
                     w
                 );
             }
-            EmbedderMsg::NotifyLoadStatusChanged(_webview_id, status) => match status {
+            EmbedderMsg::NotifyLoadStatusChanged(webview_id, status) => match status {
+                LoadStatus::Started | LoadStatus::HeadParsed => {
+                    self.notify_theme_change(sender, webview_id)
+                }
                 LoadStatus::Complete => {
                     self.window.request_redraw();
                     send_to_constellation(
                         sender,
                         EmbedderToConstellationMessage::FocusWebView(webview_id),
-                    );
-                }
-                _ => {
-                    log::trace!(
-                        "Verso WebView {webview_id:?} ignores NotifyLoadStatusChanged status: {status:?}"
                     );
                 }
             },
@@ -439,22 +437,20 @@ impl Window {
                     webview_id
                 );
             }
-            EmbedderMsg::NotifyLoadStatusChanged(_webview_id, status) => {
-                if status == LoadStatus::Complete {
+            EmbedderMsg::NotifyLoadStatusChanged(webview_id, status) => match status {
+                LoadStatus::Started | LoadStatus::HeadParsed => {
+                    self.notify_theme_change(sender, webview_id)
+                }
+                LoadStatus::Complete => {
                     self.window.request_redraw();
                     send_to_constellation(
                         sender,
                         EmbedderToConstellationMessage::FocusWebView(panel_id),
                     );
 
-                    self.create_tab(
-                        sender,
-                        self.panel.as_ref().unwrap().initial_url.clone(),
-                    );
-                } else {
-                    log::trace!("Verso Panel ignores NotifyLoadStatusChanged status: {status:?}");
+                    self.create_tab(sender, self.panel.as_ref().unwrap().initial_url.clone());
                 }
-            }
+            },
             EmbedderMsg::AllowNavigationRequest(_webview_id, id, _url) => {
                 // The panel shouldn't navigate to other pages.
                 send_to_constellation(

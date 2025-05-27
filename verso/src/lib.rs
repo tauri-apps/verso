@@ -15,7 +15,7 @@ use std::{
 };
 pub use versoview_messages::{
     ConfigFromController as VersoviewSettings, CustomProtocol, CustomProtocolBuilder, Icon,
-    ProfilerSettings, UserScript, WindowLevel,
+    ProfilerSettings, Theme, UserScript, WindowLevel,
 };
 use versoview_messages::{
     PositionType, SizeType, ToControllerMessage, ToVersoMessage, WebResourceRequestResponse,
@@ -23,7 +23,7 @@ use versoview_messages::{
 
 type ResponseFunction = Box<dyn FnOnce(Option<http::Response<Vec<u8>>>) + Send>;
 type Listener<T> = Arc<Mutex<Option<T>>>;
-type ResponseListener<T> = Arc<Mutex<HashMap<uuid::Uuid, T>>>;
+type ResponseListener<T> = Arc<Mutex<HashMap<uuid::Uuid, MpscSender<T>>>>;
 
 #[derive(Default)]
 struct EventListeners {
@@ -31,15 +31,16 @@ struct EventListeners {
     on_navigation_starting: Listener<Box<dyn Fn(url::Url) -> bool + Send + 'static>>,
     on_web_resource_requested:
         Listener<Box<dyn Fn(http::Request<Vec<u8>>, ResponseFunction) + Send + 'static>>,
-    title_response: ResponseListener<MpscSender<String>>,
-    size_response: ResponseListener<MpscSender<PhysicalSize<u32>>>,
-    position_response: ResponseListener<MpscSender<Option<PhysicalPosition<i32>>>>,
-    maximized_response: ResponseListener<MpscSender<bool>>,
-    minimized_response: ResponseListener<MpscSender<bool>>,
-    fullscreen_response: ResponseListener<MpscSender<bool>>,
-    visible_response: ResponseListener<MpscSender<bool>>,
-    scale_factor_response: ResponseListener<MpscSender<f64>>,
-    get_url_response: ResponseListener<MpscSender<url::Url>>,
+    title_response: ResponseListener<String>,
+    size_response: ResponseListener<PhysicalSize<u32>>,
+    position_response: ResponseListener<Option<PhysicalPosition<i32>>>,
+    maximized_response: ResponseListener<bool>,
+    minimized_response: ResponseListener<bool>,
+    fullscreen_response: ResponseListener<bool>,
+    visible_response: ResponseListener<bool>,
+    scale_factor_response: ResponseListener<f64>,
+    theme_response: ResponseListener<Option<Theme>>,
+    get_url_response: ResponseListener<url::Url>,
 }
 
 /// A VersoView controller
@@ -88,6 +89,7 @@ impl VersoviewController {
         let fullscreen_response = event_listeners.fullscreen_response.clone();
         let visible_response = event_listeners.visible_response.clone();
         let scale_factor_response = event_listeners.scale_factor_response.clone();
+        let theme_response = event_listeners.theme_response.clone();
         let get_url_response = event_listeners.get_url_response.clone();
         let to_verso_sender = sender.clone();
         ROUTER.add_typed_route(
@@ -164,6 +166,11 @@ impl VersoviewController {
                     ToControllerMessage::GetScaleFactorResponse(id, scale_factor) => {
                         if let Some(sender) = scale_factor_response.lock().unwrap().get(&id).take() {
                             sender.send(scale_factor).unwrap();
+                        }
+                    }
+                    ToControllerMessage::GetThemeResponse(id, theme) => {
+                        if let Some(sender) = theme_response.lock().unwrap().get(&id).take() {
+                            sender.send(theme).unwrap();
                         }
                     }
                     ToControllerMessage::GetCurrentUrlResponse(id, url) => {
@@ -337,22 +344,9 @@ impl VersoviewController {
 
     /// Get the title of the window
     pub fn get_title(&self) -> Result<String, Box<ipc_channel::ErrorKind>> {
-        let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .title_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self.sender.send(ToVersoMessage::GetTitle(id)) {
-            self.event_listeners
-                .title_response
-                .lock()
-                .unwrap()
-                .remove(&id);
-            return Err(error);
-        };
-        Ok(receiver.recv().unwrap())
+        self.get_response(&self.event_listeners.title_response, |id| {
+            ToVersoMessage::GetTitle(id)
+        })
     }
 
     /// Get the window's size
@@ -360,22 +354,9 @@ impl VersoviewController {
         &self,
         size_type: SizeType,
     ) -> Result<PhysicalSize<u32>, Box<ipc_channel::ErrorKind>> {
-        let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .size_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self.sender.send(ToVersoMessage::GetSize(id, size_type)) {
-            self.event_listeners
-                .size_response
-                .lock()
-                .unwrap()
-                .remove(&id);
-            return Err(error);
-        };
-        Ok(receiver.recv().unwrap())
+        self.get_response(&self.event_listeners.size_response, |id| {
+            ToVersoMessage::GetSize(id, size_type)
+        })
     }
 
     /// Returns the physical size of the window's client area.
@@ -399,25 +380,9 @@ impl VersoviewController {
         &self,
         position_type: PositionType,
     ) -> Result<Option<PhysicalPosition<i32>>, Box<ipc_channel::ErrorKind>> {
-        let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .position_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self
-            .sender
-            .send(ToVersoMessage::GetPosition(id, position_type))
-        {
-            self.event_listeners
-                .position_response
-                .lock()
-                .unwrap()
-                .remove(&id);
-            return Err(error);
-        };
-        Ok(receiver.recv().unwrap())
+        self.get_response(&self.event_listeners.position_response, |id| {
+            ToVersoMessage::GetPosition(id, position_type)
+        })
     }
 
     /// Get the window's inner position,
@@ -438,119 +403,65 @@ impl VersoviewController {
 
     /// Get if the window is currently maximized or not
     pub fn is_maximized(&self) -> Result<bool, Box<ipc_channel::ErrorKind>> {
-        let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .maximized_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self.sender.send(ToVersoMessage::GetMaximized(id)) {
-            self.event_listeners
-                .maximized_response
-                .lock()
-                .unwrap()
-                .remove(&id);
-            return Err(error);
-        };
-        Ok(receiver.recv().unwrap())
+        self.get_response(&self.event_listeners.maximized_response, |id| {
+            ToVersoMessage::GetMaximized(id)
+        })
     }
 
     /// Get if the window is currently minimized or not
     pub fn is_minimized(&self) -> Result<bool, Box<ipc_channel::ErrorKind>> {
-        let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .minimized_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self.sender.send(ToVersoMessage::GetMinimized(id)) {
-            self.event_listeners
-                .minimized_response
-                .lock()
-                .unwrap()
-                .remove(&id);
-            return Err(error);
-        };
-        Ok(receiver.recv().unwrap())
+        self.get_response(&self.event_listeners.minimized_response, |id| {
+            ToVersoMessage::GetMinimized(id)
+        })
     }
 
     /// Get if the window is currently fullscreen or not
     pub fn is_fullscreen(&self) -> Result<bool, Box<ipc_channel::ErrorKind>> {
-        let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .fullscreen_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self.sender.send(ToVersoMessage::GetFullscreen(id)) {
-            self.event_listeners
-                .fullscreen_response
-                .lock()
-                .unwrap()
-                .remove(&id);
-            return Err(error);
-        };
-        Ok(receiver.recv().unwrap())
+        self.get_response(&self.event_listeners.fullscreen_response, |id| {
+            ToVersoMessage::GetFullscreen(id)
+        })
     }
 
     /// Get the visibility of the window
     pub fn is_visible(&self) -> Result<bool, Box<ipc_channel::ErrorKind>> {
-        let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .visible_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self.sender.send(ToVersoMessage::GetVisible(id)) {
-            self.event_listeners
-                .visible_response
-                .lock()
-                .unwrap()
-                .remove(&id);
-            return Err(error);
-        };
-        Ok(receiver.recv().unwrap())
+        self.get_response(&self.event_listeners.visible_response, |id| {
+            ToVersoMessage::GetVisible(id)
+        })
     }
 
     /// Get the scale factor of the window
     pub fn get_scale_factor(&self) -> Result<f64, Box<ipc_channel::ErrorKind>> {
-        let id = uuid::Uuid::new_v4();
-        let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .scale_factor_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self.sender.send(ToVersoMessage::GetScaleFactor(id)) {
-            self.event_listeners
-                .scale_factor_response
-                .lock()
-                .unwrap()
-                .remove(&id);
-            return Err(error);
-        };
-        Ok(receiver.recv().unwrap())
+        self.get_response(&self.event_listeners.scale_factor_response, |id| {
+            ToVersoMessage::GetScaleFactor(id)
+        })
+    }
+
+    /// Get the current theme of the window
+    pub fn get_theme(&self) -> Result<Option<Theme>, Box<ipc_channel::ErrorKind>> {
+        self.get_response(&self.event_listeners.theme_response, |id| {
+            ToVersoMessage::GetTheme(id)
+        })
     }
 
     /// Get the URL of the webview
     pub fn get_current_url(&self) -> Result<url::Url, Box<ipc_channel::ErrorKind>> {
+        self.get_response(&self.event_listeners.get_url_response, |id| {
+            ToVersoMessage::GetCurrentUrl(id)
+        })
+    }
+
+    /// Resigters the listener and sends the get message to Verso,
+    /// then waits for the response message
+    fn get_response<T>(
+        &self,
+        listener: &ResponseListener<T>,
+        message: impl FnOnce(uuid::Uuid) -> ToVersoMessage,
+    ) -> Result<T, Box<ipc_channel::ErrorKind>> {
         let id = uuid::Uuid::new_v4();
         let (sender, receiver) = std::sync::mpsc::channel();
-        self.event_listeners
-            .get_url_response
-            .lock()
-            .unwrap()
-            .insert(id, sender);
-        if let Err(error) = self.sender.send(ToVersoMessage::GetCurrentUrl(id)) {
-            self.event_listeners
-                .get_url_response
-                .lock()
-                .unwrap()
-                .remove(&id);
+        listener.lock().unwrap().insert(id, sender);
+        if let Err(error) = self.sender.send(message(id)) {
+            listener.lock().unwrap().remove(&id);
             return Err(error);
         };
         Ok(receiver.recv().unwrap())

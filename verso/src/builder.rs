@@ -81,6 +81,12 @@ impl VersoBuilder {
         self
     }
 
+    /// Sets the prefered theme.
+    pub fn theme(mut self, theme: crate::Theme) -> Self {
+        self.0.theme = Some(theme);
+        self
+    }
+
     /// Sets whether the control panel should be included.
     pub fn with_panel(mut self, with_panel: bool) -> Self {
         self.0.with_panel = with_panel;

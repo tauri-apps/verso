@@ -645,10 +645,7 @@ impl Window {
                 forward_input_event(compositor, webview_id, sender, InputEvent::Keyboard(event));
             }
             WindowEvent::ThemeChanged(theme) => {
-                let theme = match theme {
-                    winit::window::Theme::Light => embedder_traits::Theme::Light,
-                    winit::window::Theme::Dark => embedder_traits::Theme::Dark,
-                };
+                let theme = to_servo_theme(Some(theme));
                 for webview_id in self.tab_manager.tab_ids() {
                     let _ = sender.send(EmbedderToConstellationMessage::ThemeChange(
                         webview_id, theme,
@@ -992,6 +989,20 @@ impl Window {
             menu.close(sender);
         }
     }
+
+    pub(crate) fn notify_theme_change(
+        &self,
+        constellation_sender: &Sender<EmbedderToConstellationMessage>,
+        webview_id: WebViewId,
+    ) {
+        send_to_constellation(
+            constellation_sender,
+            EmbedderToConstellationMessage::ThemeChange(
+                webview_id,
+                to_servo_theme(self.window.theme().as_ref()),
+            ),
+        );
+    }
 }
 
 // Prompt methods
@@ -1161,4 +1172,11 @@ fn forward_input_event(
     let _ = constellation_proxy.send(EmbedderToConstellationMessage::ForwardInputEvent(
         webview_id, event, None, /* hit_test */
     ));
+}
+
+fn to_servo_theme(theme: Option<&winit::window::Theme>) -> embedder_traits::Theme {
+    match theme {
+        Some(winit::window::Theme::Dark) => embedder_traits::Theme::Dark,
+        Some(winit::window::Theme::Light) | None => embedder_traits::Theme::Light,
+    }
 }

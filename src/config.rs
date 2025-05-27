@@ -326,6 +326,7 @@ impl Config {
             .with_transparent(config.transparent)
             .with_decorations(config.decorated)
             .with_title(config.title.unwrap_or("Verso".to_owned()))
+            .with_theme(to_winit_theme(&config.theme))
             .with_window_icon(config.icon.and_then(|icon| {
                 winit::window::Icon::from_rgba(icon.rgba, icon.width, icon.height).ok()
             }));
@@ -611,5 +612,15 @@ pub(crate) fn to_winit_window_level(
         versoview_messages::WindowLevel::AlwaysOnBottom => {
             winit::window::WindowLevel::AlwaysOnBottom
         }
+    }
+}
+
+pub(crate) fn to_winit_theme(
+    theme: &Option<versoview_messages::Theme>,
+) -> Option<winit::window::Theme> {
+    match theme {
+        Some(versoview_messages::Theme::Light) => Some(winit::window::Theme::Light),
+        Some(versoview_messages::Theme::Dark) => Some(winit::window::Theme::Dark),
+        None => None,
     }
 }

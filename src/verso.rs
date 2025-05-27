@@ -46,7 +46,7 @@ use winit::{
 use crate::{
     bookmark::BookmarkManager,
     compositor::{IOCompositor, InitialCompositorState, ShutdownState},
-    config::{Config, parse_cli_args, to_winit_window_level},
+    config::{Config, parse_cli_args, to_winit_theme, to_winit_window_level},
     webview::execute_script,
     window::Window,
 };
@@ -719,6 +719,11 @@ impl Verso {
                         .set_window_level(to_winit_window_level(window_level));
                 }
             }
+            ToVersoMessage::SetTheme(theme) => {
+                if let Some(window) = self.first_window() {
+                    window.window.set_theme(to_winit_theme(&theme));
+                }
+            }
             ToVersoMessage::StartDragging => {
                 if let Some(window) = self.first_window() {
                     let _ = window.window.drag_window();
@@ -835,6 +840,26 @@ impl Verso {
                         log::error!(
                             "Verso failed to send GetScaleFactorResponse to controller: {error}"
                         )
+                    }
+                }
+            }
+            ToVersoMessage::GetTheme(id) => {
+                if let Some(window) = self.first_window() {
+                    if let Err(error) = self.to_controller_sender.as_ref().unwrap().send(
+                        ToControllerMessage::GetThemeResponse(
+                            id,
+                            match window.window.theme() {
+                                Some(winit::window::Theme::Light) => {
+                                    Some(versoview_messages::Theme::Light)
+                                }
+                                Some(winit::window::Theme::Dark) => {
+                                    Some(versoview_messages::Theme::Dark)
+                                }
+                                None => None,
+                            },
+                        ),
+                    ) {
+                        log::error!("Verso failed to send GetThemeResponse to controller: {error}")
                     }
                 }
             }
