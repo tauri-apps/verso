@@ -330,6 +330,12 @@ impl VersoviewController {
         Ok(())
     }
 
+    /// Sets the theme
+    pub fn set_theme(&self, theme: Option<Theme>) -> Result<(), Box<ipc_channel::ErrorKind>> {
+        self.sender.send(ToVersoMessage::SetTheme(theme))?;
+        Ok(())
+    }
+
     /// Moves the window with the left mouse button until the button is released
     pub fn start_dragging(&self) -> Result<(), Box<ipc_channel::ErrorKind>> {
         self.sender.send(ToVersoMessage::StartDragging)?;
