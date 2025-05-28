@@ -966,7 +966,12 @@ impl Window {
         #[cfg(linux)]
         {
             if let Some(icon_image) = notification.icon_resource.as_ref().and_then(|icon| {
-                Image::from_rgba(icon.width as i32, icon.height as i32, icon.bytes.to_vec()).ok()
+                Image::from_rgba(
+                    icon.metadata.width as i32,
+                    icon.metadata.height as i32,
+                    icon.bytes.to_vec(),
+                )
+                .ok()
             }) {
                 display_notification.image_data(icon_image);
             }
