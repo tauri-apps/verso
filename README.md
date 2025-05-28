@@ -21,7 +21,6 @@ Verso is still under development. We don't accept feature requests at the moment
 
 ```sh
 scoop install git python llvm cmake curl
-pip install mako
 ```
 
 > You can also use chocolatey to install if you prefer it.
@@ -39,7 +38,6 @@ cargo run
 
 ```sh
 brew install cmake pkg-config harfbuzz
-pip install mako
 ```
 
 - Build & run:

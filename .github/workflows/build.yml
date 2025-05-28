@@ -48,7 +48,6 @@ jobs:
             libharfbuzz-dev liblzma-dev libunwind-dev libvulkan1 \
             libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 xorg-dev sway \
-            python3-mako
 
       - name: Check
         run: cargo check
@@ -105,7 +104,6 @@ jobs:
             libharfbuzz-dev liblzma-dev libunwind-dev libunwind-dev libvulkan1 \
             libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 xorg-dev sway \
-            python3-mako
 
       - name: Check for merge group test
         if: ${{ github.event_name != 'schedule' && github.event_name != 'workflow_dispatch' }}
@@ -169,8 +167,7 @@ jobs:
       - name: Install dependencies
         run: |
           scoop install git cmake curl
-          python -m pip install mako
-
+          
       - name: Upgrade LLVM
         run: |
           choco upgrade llvm
@@ -236,7 +233,6 @@ jobs:
       - name: Install dependencies
         run: |
           brew install cmake
-          python -m pip install mako
           curl https://gstreamer.freedesktop.org/data/pkg/osx/1.24.6/gstreamer-1.0-1.24.6-universal.pkg -o runtime.pkg
           sudo installer -pkg runtime.pkg -target /
           curl https://gstreamer.freedesktop.org/data/pkg/osx/1.24.6/gstreamer-1.0-devel-1.24.6-universal.pkg -o develop.pkg

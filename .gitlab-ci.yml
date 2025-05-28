@@ -40,7 +40,6 @@ merge_pre_check:
         libharfbuzz-dev liblzma-dev libunwind-dev libvulkan1 \
         libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
         libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 xorg-dev sway \
-        python3-mako
     - cargo check
 
 # Check NixOS
@@ -95,7 +94,6 @@ build_linux:
           libharfbuzz-dev liblzma-dev libunwind-dev libvulkan1 \
           libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
           libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 xorg-dev sway \
-          python3-mako
         cargo check || echo "Not a scheduled or manual build"
       fi
     - |
