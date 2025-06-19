@@ -5,8 +5,9 @@ use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::Sender;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg, ImeEvent, InputEvent,
-    MouseButton, MouseButtonAction, MouseButtonEvent, MouseMoveEvent, Notification, PromptResponse,
-    TouchEventType, ViewportDetails, WebDriverJSValue, WebResourceResponseMsg, WheelMode,
+    MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeaveEvent, MouseMoveEvent,
+    Notification, PromptResponse, TouchEventType, ViewportDetails, WebDriverJSValue,
+    WebResourceResponseMsg, WheelMode,
 };
 use euclid::{Point2D, Scale, Size2D};
 use glutin::{
@@ -28,7 +29,7 @@ use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
 use webrender_api::{
     ScrollLocation,
-    units::{DeviceIntPoint, DevicePoint, DeviceRect, DeviceSize, LayoutVector2D},
+    units::{DeviceIntPoint, DevicePixel, DevicePoint, DeviceRect, DeviceSize, LayoutVector2D},
 };
 #[cfg(any(linux, target_os = "windows"))]
 use winit::window::ResizeDirection;
@@ -90,6 +91,8 @@ pub struct Window {
     pub(crate) event_listeners: EventListeners,
     /// The mouse physical position in the web view.
     pub(crate) mouse_position: Cell<Option<PhysicalPosition<f64>>>,
+    /// The webview that the mouse is currenly hovering on.
+    hovering_webview: Option<WebViewId>,
     /// Modifiers state of the keyboard.
     modifiers_state: Cell<ModifiersState>,
     /// State to indicate if the window is resizing.
@@ -148,6 +151,7 @@ impl Window {
                 panel: None,
                 event_listeners: Default::default(),
                 mouse_position: Default::default(),
+                hovering_webview: None,
                 modifiers_state: Cell::new(ModifiersState::default()),
                 resizing: false,
                 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -194,6 +198,7 @@ impl Window {
             // webview: None,
             event_listeners: Default::default(),
             mouse_position: Default::default(),
+            hovering_webview: None,
             modifiers_state: Cell::new(ModifiersState::default()),
             resizing: false,
             #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -421,25 +426,38 @@ impl Window {
                 compositor.swap_current_window(self);
             }
             WindowEvent::CursorLeft { .. } => {
-                self.mouse_position.set(None);
+                let position = self.mouse_position.take();
+                let hovering_webview = self.hovering_webview.take();
+                if let (Some(position), Some(hovering_webview)) = (position, hovering_webview) {
+                    let point: DevicePoint = DevicePoint::new(position.x as f32, position.y as f32);
+                    forward_input_event(
+                        compositor,
+                        hovering_webview,
+                        sender,
+                        InputEvent::MouseLeave(MouseLeaveEvent::new(point)),
+                    );
+                }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let point: DevicePoint = DevicePoint::new(position.x as f32, position.y as f32);
+                let last_position = self.mouse_position.get().unwrap_or(*position).cast();
                 self.mouse_position.set(Some(*position));
-                let webview_id = match self.focused_webview_id {
-                    Some(webview_id) => webview_id,
-                    None => {
-                        log::trace!("No focused webview, skipping MouseInput event.");
-                        return;
-                    }
-                };
 
-                forward_input_event(
-                    compositor,
-                    webview_id,
-                    sender,
-                    InputEvent::MouseMove(MouseMoveEvent::new(point)),
-                );
+                let point = DevicePoint::new(position.x as f32, position.y as f32);
+                let target_webview = self.forward_mouse_move(compositor, sender, point);
+                let last_hovering_webview = self.hovering_webview.take();
+                self.hovering_webview = target_webview;
+
+                if last_hovering_webview != target_webview {
+                    if let Some(last_hovering_webview) = last_hovering_webview {
+                        let last_point = DevicePoint::new(last_position.x, last_position.y);
+                        forward_input_event(
+                            compositor,
+                            last_hovering_webview,
+                            sender,
+                            InputEvent::MouseLeave(MouseLeaveEvent::new(last_point)),
+                        );
+                    }
+                }
 
                 // handle Windows and Linux non-decoration window resize cursor
                 #[cfg(any(linux, target_os = "windows"))]
@@ -642,7 +660,12 @@ impl Window {
                 if self.handle_keyboard_shortcut(compositor, &event) {
                     return;
                 }
-                forward_input_event(compositor, webview_id, sender, InputEvent::Keyboard(event));
+                forward_input_event(
+                    compositor,
+                    webview_id,
+                    sender,
+                    InputEvent::Keyboard(embedder_traits::KeyboardEvent::new(event)),
+                );
             }
             WindowEvent::ThemeChanged(theme) => {
                 let theme = to_servo_theme(Some(theme));
@@ -1007,6 +1030,38 @@ impl Window {
                 to_servo_theme(self.window.theme().as_ref()),
             ),
         );
+    }
+
+    /// Forward mouse move event to the first webview under the position,
+    /// returns the [`WebViewId`] of that webview
+    fn forward_mouse_move(
+        &self,
+        compositor: &mut IOCompositor,
+        sender: &Sender<EmbedderToConstellationMessage>,
+        point: Point2D<f32, DevicePixel>,
+    ) -> Option<WebViewId> {
+        for webview in [
+            &self.tab_manager.current_tab().map(|tab| tab.webview()),
+            &self.panel.as_ref().map(|panel| &panel.webview),
+        ]
+        .into_iter()
+        .filter_map(|webview| *webview)
+        {
+            if !webview.rect.contains(point) {
+                continue;
+            }
+
+            forward_input_event(
+                compositor,
+                webview.webview_id,
+                sender,
+                InputEvent::MouseMove(MouseMoveEvent::new(point)),
+            );
+
+            return Some(webview.webview_id);
+        }
+
+        None
     }
 }
 

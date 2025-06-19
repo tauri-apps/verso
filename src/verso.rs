@@ -424,7 +424,7 @@ impl Verso {
         // Handle Compositor's messages first
         log::trace!("Verso is handling Compositor messages");
 
-        compositor.receive_messages(&mut self.windows);
+        compositor.handle_messages(&mut self.windows);
 
         // Only handle incoming embedder messages if the compositor hasn't already started shutting down.
         while let Ok(msg) = self.embedder_receiver.try_recv() {

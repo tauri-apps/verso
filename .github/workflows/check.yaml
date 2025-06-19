@@ -40,7 +40,10 @@ jobs:
             libharfbuzz-dev liblzma-dev libunwind-dev libvulkan1 \
             libx11-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxmu-dev libxmu6 libegl1-mesa-dev llvm-dev m4 xorg-dev sway \
-            
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Check
         run: cargo check
 
@@ -56,6 +59,9 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+
       - name: Check
         run: cargo check
 
@@ -70,6 +76,9 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
 
       - name: Install dependencies
         run: |
