@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -186,6 +186,11 @@ pub struct IOCompositor {
     /// will want to avoid blocking on UI events, and just
     /// run the event loop at the vsync interval.
     pub is_animating: bool,
+
+    /// Pending input events queue. Priavte and only this thread pushes events to it.
+    pending_point_input_events: VecDeque<InputEvent>,
+    /// WebRender is not ready between `SendDisplayList` and `WebRenderFrameReady` messages.
+    webrender_frame_ready: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -376,6 +381,8 @@ impl IOCompositor {
             pending_frames: 0,
             last_animation_tick: Instant::now(),
             is_animating: false,
+            pending_point_input_events: VecDeque::new(),
+            webrender_frame_ready: false,
         };
 
         // Make sure the GL state is OK
@@ -673,37 +680,38 @@ impl IOCompositor {
                 let display_list_info = match display_list_receiver.recv() {
                     Ok(display_list_info) => display_list_info,
                     Err(error) => {
-                        warn!("Could not receive display list info: {error}");
-                        return;
+                        return warn!("Could not receive display list info: {error}");
                     }
                 };
                 let display_list_info: CompositorDisplayListInfo =
                     match bincode::deserialize(&display_list_info) {
                         Ok(display_list_info) => display_list_info,
                         Err(error) => {
-                            warn!("Could not deserialize display list info: {error}");
-                            return;
+                            return warn!("Could not deserialize display list info: {error}");
                         }
                     };
                 let items_data = match display_list_receiver.recv() {
                     Ok(display_list_data) => display_list_data,
                     Err(error) => {
-                        warn!("Could not receive WebRender display list items data: {error}");
-                        return;
+                        return warn!(
+                            "Could not receive WebRender display list items data: {error}"
+                        );
                     }
                 };
                 let cache_data = match display_list_receiver.recv() {
                     Ok(display_list_data) => display_list_data,
                     Err(error) => {
-                        warn!("Could not receive WebRender display list cache data: {error}");
-                        return;
+                        return warn!(
+                            "Could not receive WebRender display list cache data: {error}"
+                        );
                     }
                 };
                 let spatial_tree = match display_list_receiver.recv() {
                     Ok(display_list_data) => display_list_data,
                     Err(error) => {
-                        warn!("Could not receive WebRender display list spatial tree: {error}.");
-                        return;
+                        return warn!(
+                            "Could not receive WebRender display list spatial tree: {error}."
+                        );
                     }
                 };
                 let built_display_list = BuiltDisplayList::from_data(
@@ -714,6 +722,9 @@ impl IOCompositor {
                     },
                     display_list_descriptor,
                 );
+
+                // WebRender is not ready until we receive "NewWebRenderFrameReady"
+                self.webrender_frame_ready = false;
 
                 let pipeline_id = display_list_info.pipeline_id;
                 let details = self.pipeline_details(pipeline_id.into());
@@ -1432,11 +1443,25 @@ impl IOCompositor {
             return;
         };
 
-        // If we can't find a pipeline to send this event to, we cannot continue.
-        let Ok(result) =
-            self.hit_test_at_point(point, |pipeline_id| self.pipeline_details.get(&pipeline_id))
-        else {
+        // Delay the event if the epoch is not synchronized yet (new frame is not ready),
+        // or hit test result would fail and the event is rejected anyway.
+        if !self.webrender_frame_ready || !self.pending_point_input_events.is_empty() {
+            self.pending_point_input_events.push_back(event);
             return;
+        }
+
+        // If we can't find a pipeline to send this event to, we cannot continue.
+        let result = match self
+            .hit_test_at_point(point, |pipeline_id| self.pipeline_details.get(&pipeline_id))
+        {
+            Ok(hit_test_results) => hit_test_results,
+            Err(HitTestError::EpochMismatch) => {
+                self.pending_point_input_events.push_back(event);
+                return;
+            }
+            _ => {
+                return;
+            }
         };
 
         self.update_cursor_from_hittest(point, &result);
@@ -1450,6 +1475,39 @@ impl IOCompositor {
                 ))
         {
             warn!("Sending event to constellation failed ({error:?}).");
+        }
+    }
+
+    // TODO: This function duplicates a lot of `dispatch_point_input_event.
+    // Perhaps it should just be called here instead.
+    pub(crate) fn dispatch_pending_point_input_events(&mut self, webview_id: WebViewId) {
+        while let Some(event) = self.pending_point_input_events.pop_front() {
+            // Events that do not need to do hit testing are sent directly to the
+            // constellation to filter down.
+            let Some(point) = event.point() else {
+                continue;
+            };
+
+            // If we can't find a pipeline to send this event to, we cannot continue.
+            let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
+            let Ok(result) = self.hit_test_at_point(point, get_pipeline_details) else {
+                // Don't need to process pending input events in this frame any more.
+                // TODO: Add multiple retry later if needed.
+                return;
+            };
+
+            self.update_cursor_from_hittest(point, &result);
+
+            if let Err(error) =
+                self.constellation_chan
+                    .send(EmbedderToConstellationMessage::ForwardInputEvent(
+                        webview_id,
+                        event,
+                        Some(result),
+                    ))
+            {
+                warn!("Sending event to constellation failed ({error:?}).");
+            }
         }
     }
 
@@ -2099,7 +2157,7 @@ impl IOCompositor {
     }
 
     /// Receive and handle compositor messages.
-    pub fn receive_messages(&mut self, windows: &mut HashMap<WindowId, (Window, DocumentId)>) {
+    pub fn handle_messages(&mut self, windows: &mut HashMap<WindowId, (Window, DocumentId)>) {
         // Check for new messages coming from the other threads in the system.
         let mut compositor_messages = vec![];
         let mut found_recomposite_msg = false;
@@ -2112,6 +2170,13 @@ impl IOCompositor {
                 }
                 CompositorMsg::NewWebRenderFrameReady(..) => {
                     found_recomposite_msg = true;
+
+                    let webviews: Vec<_> = self.webviews.keys().copied().collect();
+                    for webview in webviews {
+                        self.dispatch_pending_point_input_events(webview);
+                    }
+                    self.webrender_frame_ready = true;
+
                     compositor_messages.push(msg)
                 }
                 _ => compositor_messages.push(msg),

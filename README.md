@@ -20,7 +20,7 @@ Verso is still under development. We don't accept feature requests at the moment
 - Install [scoop](https://scoop.sh/) and then install other tools:
 
 ```sh
-scoop install git python llvm cmake curl
+scoop install git python uv llvm cmake curl
 ```
 
 > You can also use chocolatey to install if you prefer it.
@@ -37,7 +37,7 @@ cargo run
 - Install [Homebrew](https://brew.sh/) and then install other tools:
 
 ```sh
-brew install cmake pkg-config harfbuzz
+brew install cmake pkg-config harfbuzz uv
 ```
 
 - Build & run:
