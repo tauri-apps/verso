@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 use std::ffi::c_void;
 use std::rc::Rc;
@@ -12,13 +13,14 @@ use base::cross_process_instant::CrossProcessInstant;
 use base::id::{PipelineId, WebViewId};
 use base::{Epoch, WebRenderEpochToU16};
 use bitflags::bitflags;
-use compositing_traits::display_list::{CompositorDisplayListInfo, HitTestInfo, ScrollTree};
+use compositing_traits::display_list::{
+    CompositorDisplayListInfo, HitTestInfo, ScrollTree, ScrollType,
+};
 use compositing_traits::{
-    CompositionPipeline, CompositorMsg, CompositorProxy, ImageUpdate, SendableFrameTree,
+    CompositionPipeline, CompositorMsg, CompositorProxy, ImageUpdate, PipelineExitSource,
+    SendableFrameTree,
 };
-use constellation_traits::{
-    EmbedderToConstellationMessage, PaintMetricEvent, ScrollState, WindowSizeType,
-};
+use constellation_traits::{EmbedderToConstellationMessage, PaintMetricEvent, WindowSizeType};
 use crossbeam_channel::{Receiver, Sender};
 use dpi::PhysicalSize;
 use embedder_traits::{
@@ -198,11 +200,20 @@ struct ScrollEvent {
 
 #[derive(Clone, Copy)]
 enum ScrollZoomEvent {
-    /// An pinch zoom event that magnifies the view by the given factor.
+    /// A pinch zoom event that magnifies the view by the given factor.
     PinchZoom(f32),
+    /// A zoom event that magnifies the view by the factor parsed from meta tag.
+    ViewportZoom(f32),
     /// A scroll event that scrolls the scroll node at the given location by the
     /// given amount.
     Scroll(ScrollEvent),
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct ScrollResult {
+    pub hit_test_result: CompositorHitTestResult,
+    pub external_scroll_id: ExternalScrollId,
+    pub offset: LayoutVector2D,
 }
 
 /// Why we need to be repainted. This is used for debugging.
@@ -281,6 +292,15 @@ struct PipelineDetails {
 
     /// The paint metric status of the first contentful paint.
     pub first_contentful_paint_metric: PaintMetricState,
+
+    /// Which parts of Servo have reported that this `Pipeline` has exited. Only when allAdd commentMore actions
+    /// have done so will it be discarded.
+    pub exited: PipelineExitSource,
+}
+
+enum HitTestError {
+    EpochMismatch,
+    Others,
 }
 
 impl PipelineDetails {
@@ -296,30 +316,14 @@ impl PipelineDetails {
             scroll_tree: ScrollTree::default(),
             first_paint_metric: PaintMetricState::Waiting,
             first_contentful_paint_metric: PaintMetricState::Waiting,
+            exited: PipelineExitSource::empty(),
         }
     }
 
     fn install_new_scroll_tree(&mut self, new_scroll_tree: ScrollTree) {
-        let old_scroll_offsets: HashMap<ExternalScrollId, LayoutVector2D> = self
-            .scroll_tree
-            .nodes
-            .drain(..)
-            .filter_map(|node| match (node.external_id(), node.offset()) {
-                (Some(external_id), Some(offset)) => Some((external_id, offset)),
-                _ => None,
-            })
-            .collect();
-
+        let old_scroll_offsets = self.scroll_tree.scroll_offsets();
         self.scroll_tree = new_scroll_tree;
-        for node in self.scroll_tree.nodes.iter_mut() {
-            match node.external_id() {
-                Some(external_id) => match old_scroll_offsets.get(&external_id) {
-                    Some(new_offset) => node.set_offset(*new_offset),
-                    None => continue,
-                },
-                _ => continue,
-            };
-        }
+        self.scroll_tree.set_all_scroll_offsets(&old_scroll_offsets);
     }
 
     pub(crate) fn animations_or_animation_callbacks_running(&self) -> bool {
@@ -402,28 +406,34 @@ impl IOCompositor {
         self.rendering_context.size2d()
     }
 
-    pub(crate) fn update_cursor(&mut self, pos: DevicePoint, result: &CompositorHitTestResult) {
-        self.cursor_pos = pos;
-        let cursor = match result.cursor {
-            Some(cursor) if cursor != self.cursor => cursor,
-            _ => return,
-        };
-
-        let Some(webview_id) = self
+    fn update_cursor_from_hittest(&mut self, pos: DevicePoint, result: &CompositorHitTestResult) {
+        if let Some(webview_id) = self
             .pipeline_details(result.pipeline_id)
             .pipeline
             .as_ref()
             .map(|composition_pipeline| composition_pipeline.webview_id)
-        else {
-            warn!(
-                "Updating cursor for not-yet-rendered pipeline: {}",
-                result.pipeline_id
-            );
-            return;
+        {
+            self.update_cursor(pos, webview_id, result.cursor);
+        } else {
+            warn!("Couldn't update cursor for non-WebView-associated pipeline");
         };
+    }
+
+    fn update_cursor(&mut self, pos: DevicePoint, webview_id: WebViewId, cursor: Option<Cursor>) {
+        self.cursor_pos = pos;
+
+        let cursor = match cursor {
+            Some(cursor) if cursor != self.cursor => cursor,
+            _ => return,
+        };
+
         self.cursor = cursor;
-        let msg = EmbedderToConstellationMessage::SetCursor(webview_id, cursor);
-        if let Err(e) = self.constellation_chan.send(msg) {
+        if let Err(e) = self
+            .constellation_chan
+            .send(EmbedderToConstellationMessage::SetCursor(
+                webview_id, cursor,
+            ))
+        {
             warn!("Sending event to constellation failed ({:?}).", e);
         }
     }
@@ -519,7 +529,7 @@ impl IOCompositor {
 
             CompositorMsg::CreateOrUpdateWebView(frame_tree) => {
                 self.create_or_update_webview(&frame_tree, windows);
-                self.send_scroll_positions_to_layout_for_pipeline(&frame_tree.pipeline.id);
+                self.send_scroll_positions_to_layout_for_pipeline(frame_tree.pipeline.id);
             }
 
             CompositorMsg::RemoveWebView(webview_id) => {
@@ -556,23 +566,26 @@ impl IOCompositor {
                 }
             }
 
-            CompositorMsg::PipelineExited(_webview_id, pipeline_id, sender) => {
+            CompositorMsg::PipelineExited(_webview_id, pipeline_id, pipeline_exit_source) => {
                 debug!("Compositor got pipeline exited: {:?}", pipeline_id);
-                self.remove_pipeline_root_layer(pipeline_id);
-                let _ = sender.send(());
+                self.pipeline_exited(pipeline_id, pipeline_exit_source);
             }
 
             CompositorMsg::NewWebRenderFrameReady(_document_id, recomposite_needed) => {
                 self.pending_frames -= 1;
+                let point: DevicePoint = self.cursor_pos;
 
                 if recomposite_needed {
-                    if let Some(result) = self.hit_test_at_point(self.cursor_pos) {
-                        self.update_cursor(self.cursor_pos, &result);
+                    let details_for_pipeline =
+                        |pipeline_id| self.pipeline_details.get(&pipeline_id);
+                    let result = self.hit_test_at_point(point, details_for_pipeline);
+                    if let Ok(result) = result {
+                        self.update_cursor_from_hittest(point, &result);
                     }
                 }
 
-                if recomposite_needed || self.animation_callbacks_active() {
-                    self.set_needs_repaint(RepaintReason::NewWebRenderFrame)
+                if recomposite_needed || self.animation_callbacks_running() {
+                    self.set_needs_repaint(RepaintReason::NewWebRenderFrame);
                 }
             }
 
@@ -596,7 +609,7 @@ impl IOCompositor {
                 self.dispatch_input_event(
                     webview_id,
                     InputEvent::MouseButton(MouseButtonEvent::new(action, button, point))
-                        .with_webdriver_message_id(Some(webdriver_id)),
+                        .with_webdriver_message_id(webdriver_id),
                 );
             }
 
@@ -606,7 +619,7 @@ impl IOCompositor {
                 self.dispatch_input_event(
                     webview_id,
                     InputEvent::MouseMove(MouseMoveEvent::new(point))
-                        .with_webdriver_message_id(Some(webdriver_id)),
+                        .with_webdriver_message_id(webdriver_id),
                 );
             }
 
@@ -618,29 +631,31 @@ impl IOCompositor {
                     .send_transaction(self.webrender_document, txn);
             }
 
-            CompositorMsg::SendScrollNode(_webview_id, pipeline_id, point, external_scroll_id) => {
+            CompositorMsg::SendScrollNode(_webview_id, pipeline_id, offset, external_scroll_id) => {
                 let pipeline_id = pipeline_id.into();
                 let Some(pipeline_details) = self.pipeline_details.get_mut(&pipeline_id) else {
                     return;
                 };
 
-                let offset = LayoutVector2D::new(point.x, point.y);
-                if !pipeline_details
+                let Some(offset) = pipeline_details
                     .scroll_tree
-                    .set_scroll_offsets_for_node_with_external_scroll_id(
+                    .set_scroll_offset_for_node_with_external_scroll_id(
                         external_scroll_id,
-                        -offset,
+                        offset,
+                        ScrollType::Script,
                     )
-                {
-                    warn!("Could not scroll not with id: {external_scroll_id:?}");
+                else {
+                    // The renderer should be fully up-to-date with script at this point and script
+                    // should never try to scroll to an invalid location.
+                    warn!("Could not scroll node with id: {external_scroll_id:?}");
                     return;
-                }
+                };
 
                 let mut txn = Transaction::new();
                 txn.set_scroll_offsets(
                     external_scroll_id,
                     vec![SampledScrollOffset {
-                        offset,
+                        offset: -offset,
                         generation: 0,
                     }],
                 );
@@ -740,7 +755,15 @@ impl IOCompositor {
                 // mechanism from libserver.
                 self.webrender_api.flush_scene_builder();
 
-                let result = self.hit_test_at_point_with_flags_and_pipeline(point, flags, pipeline);
+                let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
+                let result = self
+                    .hit_test_at_point_with_flags_and_pipeline(
+                        point,
+                        flags,
+                        pipeline,
+                        get_pipeline_details,
+                    )
+                    .unwrap_or_default();
                 let _ = sender.send(result);
             }
 
@@ -841,8 +864,14 @@ impl IOCompositor {
                     warn!("Sending response to get screen size failed ({error:?}).");
                 }
             }
-
-            CompositorMsg::WebDriverWheelScrollEvent(webview_id, x, y, delta_x, delta_y) => {
+            CompositorMsg::WebDriverWheelScrollEvent(
+                webview_id,
+                x,
+                y,
+                delta_x,
+                delta_y,
+                message_id,
+            ) => {
                 let delta = WheelDelta {
                     x: delta_x,
                     y: delta_y,
@@ -859,9 +888,21 @@ impl IOCompositor {
                 let cursor = DeviceIntPoint::new(point.x as i32, point.y as i32);
                 self.dispatch_input_event(
                     webview_id,
-                    InputEvent::Wheel(WheelEvent { delta, point }),
+                    InputEvent::Wheel(WheelEvent::new(delta, point))
+                        .with_webdriver_message_id(message_id),
                 );
                 self.on_scroll_window_event(scroll_location, cursor);
+            }
+
+            CompositorMsg::Viewport(_webview_id, viewport_description) => {
+                self.pending_scroll_zoom_events
+                    .push(ScrollZoomEvent::ViewportZoom(
+                        viewport_description
+                            .clone()
+                            .clamp_zoom(viewport_description.initial_scale.get()),
+                    ));
+                // TODO: This is tied to per-webview and we don't currently have it yet
+                // self.viewport_description = Some(viewport_description);
             }
         }
     }
@@ -877,10 +918,9 @@ impl IOCompositor {
     /// compositor no longer does any WebRender frame generation.
     fn handle_browser_message_while_shutting_down(&mut self, msg: CompositorMsg) {
         match msg {
-            CompositorMsg::PipelineExited(_webview_id, pipeline_id, sender) => {
+            CompositorMsg::PipelineExited(_webview_id, pipeline_id, pipeline_exit_source) => {
                 debug!("Compositor got pipeline exited: {:?}", pipeline_id);
-                self.remove_pipeline_root_layer(pipeline_id);
-                let _ = sender.send(());
+                self.pipeline_exited(pipeline_id, pipeline_exit_source);
             }
             CompositorMsg::GenerateImageKey(sender) => {
                 let _ = sender.send(self.webrender_api.generate_image_key());
@@ -930,13 +970,14 @@ impl IOCompositor {
     }
 
     /// Sets or unsets the animations-running flag for the given pipeline. Returns
-    /// true if the [`WebViewRenderer`]'s overall animating state changed.
+    /// true if the pipeline has started animating.
     pub(crate) fn change_pipeline_running_animations_state(
         &mut self,
         pipeline_id: PipelineId,
         animation_state: AnimationState,
     ) -> bool {
         let pipeline_details = self.pipeline_details(pipeline_id);
+        let was_animating = pipeline_details.animating();
         match animation_state {
             AnimationState::AnimationsPresent => {
                 pipeline_details.animations_running = true;
@@ -951,25 +992,40 @@ impl IOCompositor {
                 pipeline_details.animation_callbacks_running = false;
             }
         }
-        self.update_animation_state()
+        let started_animating = !was_animating && pipeline_details.animating();
+
+        self.update_animation_state();
+
+        // It's important that an animation tick is triggered even if the
+        // WebViewRenderer's overall animation state hasn't changed. It's possible that
+        // the WebView was animating, but not producing new display lists. In that case,
+        // no repaint will happen and thus no repaint will trigger the next animation tick.
+        started_animating
     }
 
     /// Sets or unsets the throttled flag for the given pipeline. Returns
-    /// true if the [`WebViewRenderer`]'s overall animating state changed.
+    /// true if the pipeline has started animating.
     pub(crate) fn set_throttled(&mut self, pipeline_id: PipelineId, throttled: bool) -> bool {
-        self.pipeline_details(pipeline_id).throttled = throttled;
+        let pipeline_details = self.pipeline_details(pipeline_id);
+        let was_animating = pipeline_details.animating();
+        pipeline_details.throttled = throttled;
+        let started_animating = !was_animating && pipeline_details.animating();
 
         // Throttling a pipeline can cause it to be taken into the "not-animating" state.
-        self.update_animation_state()
+        self.update_animation_state();
+
+        // It's important that an animation tick is triggered even if the
+        // WebViewRenderer's overall animation state hasn't changed. It's possible that
+        // the WebView was animating, but not producing new display lists. In that case,
+        // no repaint will happen and thus no repaint will trigger the next animation tick.
+        started_animating
     }
 
-    pub(crate) fn update_animation_state(&mut self) -> bool {
-        let animating = self
+    pub(crate) fn update_animation_state(&mut self) {
+        self.is_animating = self
             .pipeline_details
             .values()
             .any(PipelineDetails::animating);
-        let old_animating = std::mem::replace(&mut self.is_animating, animating);
-        old_animating != self.is_animating
     }
 
     fn pipeline_details(&mut self, pipeline_id: PipelineId) -> &mut PipelineDetails {
@@ -1265,7 +1321,22 @@ impl IOCompositor {
         }
     }
 
-    fn remove_pipeline_root_layer(&mut self, pipeline_id: PipelineId) {
+    fn pipeline_exited(&mut self, pipeline_id: PipelineId, source: PipelineExitSource) {
+        let pipeline = self.pipeline_details.entry(pipeline_id);
+        let Entry::Occupied(mut pipeline) = pipeline else {
+            return;
+        };
+
+        pipeline.get_mut().exited.insert(source);
+
+        // Do not remove pipeline details until both the Constellation and Script have
+        // finished processing the pipeline shutdown. This prevents any followup messges
+        // from re-adding the pipeline details and creating a zombie.
+        if !pipeline.get().exited.is_all() {
+            return;
+        }
+
+        pipeline.remove_entry();
         self.pipeline_details.remove(&pipeline_id);
     }
 
@@ -1362,11 +1433,13 @@ impl IOCompositor {
         };
 
         // If we can't find a pipeline to send this event to, we cannot continue.
-        let Some(result) = self.hit_test_at_point(point) else {
+        let Ok(result) =
+            self.hit_test_at_point(point, |pipeline_id| self.pipeline_details.get(&pipeline_id))
+        else {
             return;
         };
 
-        self.update_cursor(point, &result);
+        self.update_cursor_from_hittest(point, &result);
 
         if let Err(error) =
             self.constellation_chan
@@ -1414,39 +1487,57 @@ impl IOCompositor {
         self.dispatch_input_event(webview_id, event);
     }
 
-    fn hit_test_at_point(&self, point: DevicePoint) -> Option<CompositorHitTestResult> {
-        self.hit_test_at_point_with_flags_and_pipeline(point, HitTestFlags::empty(), None)
-            .first()
-            .cloned()
+    fn hit_test_at_point<'a>(
+        &self,
+        point: DevicePoint,
+        details_for_pipeline: impl Fn(PipelineId) -> Option<&'a PipelineDetails>,
+    ) -> Result<CompositorHitTestResult, HitTestError> {
+        match self.hit_test_at_point_with_flags_and_pipeline(
+            point,
+            HitTestFlags::empty(),
+            None,
+            details_for_pipeline,
+        ) {
+            Ok(hit_test_results) => hit_test_results
+                .first()
+                .cloned()
+                .ok_or(HitTestError::Others),
+            Err(error) => Err(error),
+        }
     }
 
-    fn hit_test_at_point_with_flags_and_pipeline(
+    fn hit_test_at_point_with_flags_and_pipeline<'a>(
         &self,
         point: DevicePoint,
         flags: HitTestFlags,
         pipeline_id: Option<WebRenderPipelineId>,
-    ) -> Vec<CompositorHitTestResult> {
+        details_for_pipeline: impl Fn(PipelineId) -> Option<&'a PipelineDetails>,
+    ) -> Result<Vec<CompositorHitTestResult>, HitTestError> {
         // DevicePoint and WorldPoint are the same for us.
         let world_point = WorldPoint::from_untyped(point.to_untyped());
         let results =
             self.webrender_api
                 .hit_test(self.webrender_document, pipeline_id, world_point, flags);
 
-        results
+        let mut epoch_mismatch = false;
+        let results = results
             .items
             .iter()
             .filter_map(|item| {
                 let pipeline_id = item.pipeline.into();
-                let details = match self.pipeline_details.get(&pipeline_id) {
-                    Some(details) => details,
-                    None => return None,
-                };
+                let details = details_for_pipeline(pipeline_id)?;
 
                 // If the epoch in the tag does not match the current epoch of the pipeline,
-                // then the hit test is against an old version of the display list and we
-                // should ignore this hit test for now.
+                // then the hit test is against an old version of the display list.
                 match details.most_recent_display_list_epoch {
-                    Some(epoch) if epoch.as_u16() == item.tag.1 => {}
+                    Some(epoch) => {
+                        if epoch.as_u16() != item.tag.1 {
+                            // It's too early to hit test for now.
+                            // New scene building is in progress.
+                            epoch_mismatch = true;
+                            return None;
+                        }
+                    }
                     _ => return None,
                 }
 
@@ -1460,25 +1551,17 @@ impl IOCompositor {
                     scroll_tree_node: info.scroll_tree_node,
                 })
             })
-            .collect()
+            .collect();
+
+        if epoch_mismatch {
+            return Err(HitTestError::EpochMismatch);
+        }
+
+        Ok(results)
     }
 
-    fn send_touch_event(&self, webview_id: WebViewId, event: TouchEvent) {
-        let Some(result) = self.hit_test_at_point(event.point) else {
-            return;
-        };
-
-        let event = InputEvent::Touch(event);
-        if let Err(e) =
-            self.constellation_chan
-                .send(EmbedderToConstellationMessage::ForwardInputEvent(
-                    webview_id,
-                    event,
-                    Some(result),
-                ))
-        {
-            warn!("Sending event to constellation failed ({:?}).", e);
-        }
+    fn send_touch_event(&mut self, webview_id: WebViewId, event: TouchEvent) {
+        self.dispatch_input_event(webview_id, InputEvent::Touch(event))
     }
 
     /// Handle touch event.
@@ -1608,7 +1691,8 @@ impl IOCompositor {
         let mut _combined_magnification = 1.0;
         for scroll_event in self.pending_scroll_zoom_events.drain(..) {
             match scroll_event {
-                ScrollZoomEvent::PinchZoom(magnification) => {
+                ScrollZoomEvent::PinchZoom(magnification)
+                | ScrollZoomEvent::ViewportZoom(magnification) => {
                     _combined_magnification *= magnification
                 }
                 ScrollZoomEvent::Scroll(scroll_event_info) => {
@@ -1660,16 +1744,22 @@ impl IOCompositor {
 
         let mut transaction = Transaction::new();
 
-        if let Some((pipeline_id, external_id, offset)) = scroll_result {
+        if let Some(ScrollResult {
+            hit_test_result,
+            external_scroll_id,
+            offset,
+            ..
+        }) = scroll_result
+        {
             let offset = LayoutVector2D::new(-offset.x, -offset.y);
             transaction.set_scroll_offsets(
-                external_id,
+                external_scroll_id,
                 vec![SampledScrollOffset {
                     offset,
                     generation: 0,
                 }],
             );
-            self.send_scroll_positions_to_layout_for_pipeline(&pipeline_id);
+            self.send_scroll_positions_to_layout_for_pipeline(hit_test_result.pipeline_id);
         }
 
         self.generate_frame(&mut transaction, RenderReasons::APZ);
@@ -1679,13 +1769,13 @@ impl IOCompositor {
 
     /// Perform a hit test at the given [`DevicePoint`] and apply the [`ScrollLocation`]
     /// scrolling to the applicable scroll node under that point. If a scroll was
-    /// performed, returns the [`PipelineId`] of the node scrolled, the id, and the final
-    /// scroll delta.
+    /// performed, returns the hit test result contains [`PipelineId`] of the node
+    /// scrolled, the id, and the final scroll delta.
     fn scroll_node_at_device_point(
         &mut self,
         cursor: DevicePoint,
         scroll_location: ScrollLocation,
-    ) -> Option<(PipelineId, ExternalScrollId, LayoutVector2D)> {
+    ) -> Option<ScrollResult> {
         let scroll_location = match scroll_location {
             ScrollLocation::Delta(delta) => {
                 let device_pixels_per_page = self.device_pixels_per_page_pixel();
@@ -1699,27 +1789,38 @@ impl IOCompositor {
             ScrollLocation::Start | ScrollLocation::End => scroll_location,
         };
 
-        let hit_test_results =
-            self.hit_test_at_point_with_flags_and_pipeline(cursor, HitTestFlags::FIND_ALL, None);
+        let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
+        let hit_test_results = self
+            .hit_test_at_point_with_flags_and_pipeline(
+                cursor,
+                HitTestFlags::FIND_ALL,
+                None,
+                get_pipeline_details,
+            )
+            .unwrap_or_default();
 
         // Iterate through all hit test results, processing only the first node of each pipeline.
         // This is needed to propagate the scroll events from a pipeline representing an iframe to
         // its ancestor pipelines.
         let mut previous_pipeline_id = None;
-        for CompositorHitTestResult {
-            pipeline_id,
-            scroll_tree_node,
-            ..
-        } in hit_test_results.iter()
-        {
-            if previous_pipeline_id.replace(pipeline_id) != Some(pipeline_id) {
-                let scroll_result = self
-                    .pipeline_details
-                    .get_mut(pipeline_id)?
-                    .scroll_tree
-                    .scroll_node_or_ancestor(scroll_tree_node, scroll_location);
-                if let Some((external_id, offset)) = scroll_result {
-                    return Some((*pipeline_id, external_id, offset));
+        for hit_test_result in hit_test_results.iter() {
+            let pipeline_details = self
+                .pipeline_details
+                .get_mut(&hit_test_result.pipeline_id)?;
+            if previous_pipeline_id.replace(&hit_test_result.pipeline_id)
+                != Some(&hit_test_result.pipeline_id)
+            {
+                let scroll_result = pipeline_details.scroll_tree.scroll_node_or_ancestor(
+                    &hit_test_result.scroll_tree_node,
+                    scroll_location,
+                    ScrollType::InputEvents,
+                );
+                if let Some((external_scroll_id, offset)) = scroll_result {
+                    return Some(ScrollResult {
+                        hit_test_result: hit_test_result.clone(),
+                        external_scroll_id,
+                        offset,
+                    });
                 }
             }
         }
@@ -1820,24 +1921,27 @@ impl IOCompositor {
             .push(ScrollZoomEvent::PinchZoom(magnification));
     }
 
-    fn send_scroll_positions_to_layout_for_pipeline(&self, pipeline_id: &PipelineId) {
-        let details = match self.pipeline_details.get(pipeline_id) {
-            Some(details) => details,
-            None => return,
+    fn send_scroll_positions_to_layout_for_pipeline(&self, pipeline_id: PipelineId) {
+        let Some(details) = self.pipeline_details.get(&pipeline_id) else {
+            return;
         };
 
-        let mut scroll_states = Vec::new();
-        details.scroll_tree.nodes.iter().for_each(|node| {
-            if let (Some(scroll_id), Some(scroll_offset)) = (node.external_id(), node.offset()) {
-                scroll_states.push(ScrollState {
-                    scroll_id,
-                    scroll_offset,
-                });
-            }
-        });
+        let scroll_offsets = details.scroll_tree.scroll_offsets();
 
-        let message = EmbedderToConstellationMessage::SetScrollStates(*pipeline_id, scroll_states);
-        let _ = self.constellation_chan.send(message);
+        // This might be true if we have not received a display list from the layout
+        // associated with this pipeline yet. In that case, the layout is not ready to
+        // receive scroll offsets anyway, so just save time and prevent other issues by
+        // not sending them.
+        if scroll_offsets.is_empty() {
+            return;
+        }
+
+        let _ = self
+            .constellation_chan
+            .send(EmbedderToConstellationMessage::SetScrollStates(
+                pipeline_id,
+                scroll_offsets,
+            ));
     }
 
     // Check if any pipelines currently have active animations or animation callbacks.
@@ -1848,7 +1952,7 @@ impl IOCompositor {
     }
 
     /// Returns true if any animation callbacks (ie `requestAnimationFrame`) are waiting for a response.
-    fn animation_callbacks_active(&self) -> bool {
+    fn animation_callbacks_running(&self) -> bool {
         self.pipeline_details
             .values()
             .any(PipelineDetails::animation_callbacks_running)

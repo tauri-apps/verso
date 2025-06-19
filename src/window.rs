@@ -642,7 +642,12 @@ impl Window {
                 if self.handle_keyboard_shortcut(compositor, &event) {
                     return;
                 }
-                forward_input_event(compositor, webview_id, sender, InputEvent::Keyboard(event));
+                forward_input_event(
+                    compositor,
+                    webview_id,
+                    sender,
+                    InputEvent::Keyboard(embedder_traits::KeyboardEvent::new(event)),
+                );
             }
             WindowEvent::ThemeChanged(theme) => {
                 let theme = to_servo_theme(Some(theme));
