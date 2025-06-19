@@ -452,7 +452,7 @@ impl Window {
                         let last_point = DevicePoint::new(last_position.x, last_position.y);
                         forward_input_event(
                             compositor,
-                            dbg!(last_hovering_webview),
+                            last_hovering_webview,
                             sender,
                             InputEvent::MouseLeave(MouseLeaveEvent::new(last_point)),
                         );
