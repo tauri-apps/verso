@@ -66,6 +66,13 @@ jobs:
       - name: Install uv
         uses: astral-sh/setup-uv@v6
 
+      # Mozangle needs Clang 19+
+      # see https://github.com/tauri-apps/verso/actions/runs/15916377747/job/44894669786?pr=20
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: "20"
+
       - name: Build
         run: cargo build --profile release-lto
 
