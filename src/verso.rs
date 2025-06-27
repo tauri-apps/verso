@@ -18,8 +18,8 @@ use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::{Receiver, Sender, unbounded};
 use devtools;
 use embedder_traits::{
-    AllowOrDeny, EmbedderMsg, EmbedderProxy, EventLoopWaker, WebResourceResponse,
-    WebResourceResponseMsg, user_content_manager::UserContentManager,
+    AllowOrDeny, EmbedderMsg, EmbedderProxy, EventLoopWaker, WebDriverCommandMsg,
+    WebResourceResponse, WebResourceResponseMsg, user_content_manager::UserContentManager,
 };
 use euclid::Scale;
 use fonts::SystemFontService;
@@ -58,6 +58,7 @@ pub struct Verso {
     constellation_sender: Sender<EmbedderToConstellationMessage>,
     to_controller_sender: Option<IpcSender<ToControllerMessage>>,
     embedder_receiver: Receiver<EmbedderMsg>,
+    webdriver_receiver: Option<Receiver<WebDriverCommandMsg>>,
     /// For single-process Servo instances, this field controls the initialization
     /// and deinitialization of the JS Engine. Multiprocess Servo instances have their
     /// own instance that exists in the content process instead.
@@ -288,9 +289,18 @@ impl Verso {
             );
 
         // Create webdriver thread
-        if let Some(port) = opts.webdriver_port {
-            webdriver_server::start_server(port, constellation_sender.clone());
-        }
+        let webdriver_receiver = if let Some(port) = opts.webdriver_port {
+            let (embedder_sender, embedder_receiver) = unbounded();
+            webdriver_server::start_server(
+                port,
+                constellation_sender.clone(),
+                embedder_sender,
+                event_loop_waker.clone(),
+            );
+            Some(embedder_receiver)
+        } else {
+            None
+        };
 
         // The compositor coordinates with the client window to create the final
         // rendered page and display it somewhere.
@@ -334,6 +344,7 @@ impl Verso {
             constellation_sender,
             to_controller_sender,
             embedder_receiver,
+            webdriver_receiver,
             _js_engine_setup: js_engine_setup,
             clipboard: Clipboard::new().ok(),
             config,
@@ -376,6 +387,8 @@ impl Verso {
             self.handle_winit_window_event(window_id, event);
             self.handle_servo_messages(event_loop);
         }
+
+        self.handle_webdriver_messages();
     }
 
     /// Handle Winit window events
@@ -560,6 +573,32 @@ impl Verso {
             EmbedderMsg::ShowFormControl(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShutdownComplete => None,
             EmbedderMsg::FinishJavaScriptEvaluation(..) => None,
+            EmbedderMsg::WebDriverCommand(..) => None,
+        }
+    }
+
+    // TODO: Implement this
+    /// Handle webdriver messages
+    pub fn handle_webdriver_messages(&self) {
+        let Some(webdriver_receiver) = &self.webdriver_receiver else {
+            return;
+        };
+
+        while let Ok(msg) = webdriver_receiver.try_recv() {
+            match msg {
+                WebDriverCommandMsg::SendKeys(..)
+                | WebDriverCommandMsg::KeyboardAction(..)
+                | WebDriverCommandMsg::MouseButtonAction(..)
+                | WebDriverCommandMsg::MouseMoveAction(..)
+                | WebDriverCommandMsg::WheelScrollAction(..)
+                | WebDriverCommandMsg::ScriptCommand(..)
+                | WebDriverCommandMsg::TakeScreenshot(..) => {
+                    log::warn!(
+                        "WebDriverCommand {msg:?} is still not moved from constellation to embedder"
+                    );
+                }
+                _ => log::warn!("WebDriverCommand {msg:?} is not supported yet"),
+            };
         }
     }
 
