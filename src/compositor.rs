@@ -35,6 +35,7 @@ use log::{debug, trace, warn};
 use profile_traits::mem::{ProcessReports, Report, ReportKind};
 use profile_traits::time::{self as profile_time, ProfilerCategory};
 use profile_traits::{mem, path, time, time_profile};
+use servo_config::pref;
 use servo_geometry::{DeviceIndependentIntSize, DeviceIndependentPixel};
 use style_traits::CSSPixel;
 use webrender::{RenderApi, Transaction};
@@ -780,6 +781,20 @@ impl IOCompositor {
 
             CompositorMsg::GenerateImageKey(sender) => {
                 let _ = sender.send(self.webrender_api.generate_image_key());
+            }
+
+            CompositorMsg::GenerateImageKeysForPipeline(pipeline_id) => {
+                let image_keys = (0..pref!(image_key_batch_size))
+                    .map(|_| self.webrender_api.generate_image_key())
+                    .collect();
+                if let Err(error) = self.constellation_chan.send(
+                    EmbedderToConstellationMessage::SendImageKeysForPipeline(
+                        pipeline_id,
+                        image_keys,
+                    ),
+                ) {
+                    warn!("Sending Image Keys to Constellation failed with({error:?}).");
+                }
             }
 
             CompositorMsg::UpdateImages(updates) => {

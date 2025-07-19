@@ -8,7 +8,6 @@ use arboard::Clipboard;
 use base::id::{PipelineNamespace, PipelineNamespaceId, WebViewId};
 use bluetooth::BluetoothThreadFactory;
 use bluetooth_traits::BluetoothRequest;
-use canvas::canvas_paint_thread::CanvasPaintThread;
 use compositing_traits::{
     CompositorMsg, CompositorProxy, CrossProcessCompositorApi, WebrenderExternalImageHandlers,
     WebrenderImageHandlerType,
@@ -244,13 +243,6 @@ impl Verso {
             .to_proxy(),
         );
 
-        // Create canvas thread
-        let (canvas_create_sender, canvas_ipc_sender) = CanvasPaintThread::start(
-            compositor_proxy.cross_process_compositor_api.clone(),
-            system_font_service.clone(),
-            public_resource_threads.clone(),
-        );
-
         let mut user_content_manager = UserContentManager::new();
         for script in user_scripts {
             user_content_manager.add_script(script);
@@ -284,8 +276,6 @@ impl Verso {
                 opts.random_pipeline_closure_probability,
                 opts.random_pipeline_closure_seed,
                 opts.hard_fail,
-                canvas_create_sender,
-                canvas_ipc_sender,
             );
 
         // Create webdriver thread
