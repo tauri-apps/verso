@@ -6,7 +6,7 @@ use crossbeam_channel::Sender;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg, ImeEvent, InputEvent,
     MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeaveEvent, MouseMoveEvent,
-    Notification, PromptResponse, TouchEventType, ViewportDetails, WebDriverJSValue,
+    Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails, WebDriverJSValue,
     WebResourceResponseMsg, WheelMode,
 };
 use euclid::{Point2D, Scale, Size2D};
@@ -25,6 +25,7 @@ use muda::{MenuEvent, MenuEventReceiver};
 use notify_rust::Image;
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
+use servo_geometry::convert_size_to_css_pixel;
 use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
 use webrender_api::{
@@ -734,9 +735,45 @@ impl Window {
         compositor: &mut IOCompositor,
         bookmark_manager: &mut BookmarkManager,
     ) -> bool {
-        if let EmbedderMsg::SetCursor(_, cursor) = message {
-            self.set_cursor_icon(cursor);
-            return false;
+        match message {
+            EmbedderMsg::SetCursor(_, cursor) => {
+                self.set_cursor_icon(cursor);
+                return false;
+            }
+            EmbedderMsg::GetScreenMetrics(_, response_sender) => {
+                let screen_size = self
+                    .window
+                    .current_monitor()
+                    .map(|monitor| monitor.size().cast())
+                    .unwrap_or_default();
+                let scale_factor = self.window.scale_factor() as f32;
+                // let toolbar_size = Size2D::new(
+                //     0.0,
+                //     (self.toolbar_height.get() * self.hidpi_scale_factor()).0,
+                // );
+                // let screen_size = self.screen_size.to_f32() * hidpi_factor;
+
+                // // FIXME: In reality, this should subtract screen space used by the system interface
+                // // elements, but it is difficult to get this value with `winit` currently. See:
+                // // See https://github.com/rust-windowing/winit/issues/2494
+                // let available_screen_size = screen_size - toolbar_size;
+
+                let screen_metrics = ScreenMetrics {
+                    screen_size: convert_size_to_css_pixel(
+                        Size2D::new(screen_size.width, screen_size.height),
+                        Scale::new(scale_factor),
+                    ),
+                    available_size: convert_size_to_css_pixel(
+                        Size2D::new(screen_size.width, screen_size.height),
+                        Scale::new(scale_factor),
+                    ),
+                };
+                if let Err(error) = response_sender.send(screen_metrics) {
+                    log::error!("Failed to respond to GetScreenMetrics: {error}");
+                }
+                return false;
+            }
+            _ => {}
         }
 
         // Handle message in Verso Panel

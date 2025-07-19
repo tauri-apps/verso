@@ -279,13 +279,25 @@ impl Verso {
             );
 
         // Create webdriver thread
-        let webdriver_receiver = if let Some(port) = opts.webdriver_port {
+        let webdriver_receiver = if let Some(port) = config.webdriver_port {
             let (embedder_sender, embedder_receiver) = unbounded();
+            let (webdriver_response_sender, webdriver_response_receiver) = ipc::channel().unwrap();
+
+            // Set the WebDriver response sender to constellation.
+            // TODO: consider using Servo API to notify embedder about input events completions
+            constellation_sender
+                .send(EmbedderToConstellationMessage::SetWebDriverResponseSender(
+                    webdriver_response_sender,
+                ))
+                .unwrap_or_else(|_| {
+                    log::warn!("Failed to set WebDriver response sender in constellation");
+                });
             webdriver_server::start_server(
                 port,
                 constellation_sender.clone(),
                 embedder_sender,
                 event_loop_waker.clone(),
+                webdriver_response_receiver,
             );
             Some(embedder_receiver)
         } else {
@@ -563,7 +575,9 @@ impl Verso {
             EmbedderMsg::ShowFormControl(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShutdownComplete => None,
             EmbedderMsg::FinishJavaScriptEvaluation(..) => None,
-            EmbedderMsg::WebDriverCommand(..) => None,
+            EmbedderMsg::HistoryTraversalComplete(webview_id, ..) => Some(webview_id),
+            EmbedderMsg::GetWindowRect(webview_id, ..) => Some(webview_id),
+            EmbedderMsg::GetScreenMetrics(webview_id, ..) => Some(webview_id),
         }
     }
 

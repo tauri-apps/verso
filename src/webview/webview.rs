@@ -4,8 +4,8 @@ use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 use crossbeam_channel::Sender;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, ConfirmResponse, ContextMenuResult, EmbedderMsg, LoadStatus,
-    PromptResponse, SimpleDialog, ViewportDetails, WebDriverCommandMsg, WebDriverJSResult,
-    WebDriverScriptCommand,
+    PromptResponse, SimpleDialog, TraversalId, ViewportDetails, WebDriverCommandMsg,
+    WebDriverJSResult, WebDriverScriptCommand,
 };
 use euclid::Scale;
 use ipc_channel::ipc;
@@ -644,6 +644,7 @@ impl Window {
                                             EmbedderToConstellationMessage::TraverseHistory(
                                                 id,
                                                 TraversalDirection::Back(1),
+                                                TraversalId::new(),
                                             ),
                                         );
                                         // TODO Set EmbedderMsg::Status to None
@@ -654,6 +655,7 @@ impl Window {
                                             EmbedderToConstellationMessage::TraverseHistory(
                                                 id,
                                                 TraversalDirection::Forward(1),
+                                                TraversalId::new(),
                                             ),
                                         );
                                         // TODO Set EmbedderMsg::Status to None

@@ -161,6 +161,8 @@ pub struct ConfigFromController {
     pub with_panel: bool,
     /// Port number to start a server to listen to remote Firefox devtools connections. 0 for random port.
     pub devtools_port: Option<u16>,
+    /// Start remote WebDriver server on port
+    pub webdriver_port: Option<u16>,
     /// Servo time profile settings
     pub profiler_settings: Option<ProfilerSettings>,
     /// Override the user agent
@@ -195,6 +197,7 @@ impl Default for ConfigFromController {
             url: None,
             with_panel: false,
             devtools_port: None,
+            webdriver_port: None,
             profiler_settings: None,
             user_agent: None,
             user_scripts: Vec::new(),
