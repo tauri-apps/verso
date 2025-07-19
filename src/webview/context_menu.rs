@@ -347,6 +347,7 @@ impl Window {
                             EmbedderToConstellationMessage::TraverseHistory(
                                 tab_id,
                                 TraversalDirection::Back(1),
+                                TraversalId::new(),
                             ),
                         );
                     }
@@ -356,6 +357,7 @@ impl Window {
                             EmbedderToConstellationMessage::TraverseHistory(
                                 tab_id,
                                 TraversalDirection::Forward(1),
+                                TraversalId::new(),
                             ),
                         );
                     }
