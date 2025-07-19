@@ -25,12 +25,15 @@ use muda::{MenuEvent, MenuEventReceiver};
 use notify_rust::Image;
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
-use servo_geometry::convert_size_to_css_pixel;
+use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
 use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
 use webrender_api::{
     ScrollLocation,
-    units::{DeviceIntPoint, DevicePixel, DevicePoint, DeviceRect, DeviceSize, LayoutVector2D},
+    units::{
+        DeviceIntPoint, DeviceIntRect, DevicePixel, DevicePoint, DeviceRect, DeviceSize,
+        LayoutVector2D,
+    },
 };
 #[cfg(any(linux, target_os = "windows"))]
 use winit::window::ResizeDirection;
@@ -740,13 +743,32 @@ impl Window {
                 self.set_cursor_icon(cursor);
                 return false;
             }
+            EmbedderMsg::GetWindowRect(_, response_sender) => {
+                let scale_factor = self.window.scale_factor() as f32;
+                let position = self.window.outer_position().unwrap_or_default();
+                let size = self.window.outer_size();
+                let window_rect = DeviceIntRect::from_origin_and_size(
+                    Point2D::new(position.x, position.y),
+                    Size2D::new(size.width, size.height).to_i32(),
+                );
+                if let Err(error) = response_sender.send(convert_rect_to_css_pixel(
+                    window_rect,
+                    Scale::new(scale_factor),
+                )) {
+                    log::error!("Failed to respond to GetWindowRect: {error}");
+                }
+                return false;
+            }
             EmbedderMsg::GetScreenMetrics(_, response_sender) => {
-                let screen_size = self
-                    .window
-                    .current_monitor()
+                let monitor = self.window.current_monitor();
+                let screen_size = monitor
+                    .as_ref()
                     .map(|monitor| monitor.size().cast())
                     .unwrap_or_default();
-                let scale_factor = self.window.scale_factor() as f32;
+                let scale_factor = monitor
+                    .as_ref()
+                    .map(|monitor| monitor.scale_factor() as f32)
+                    .unwrap_or_default();
                 // let toolbar_size = Size2D::new(
                 //     0.0,
                 //     (self.toolbar_height.get() * self.hidpi_scale_factor()).0,
