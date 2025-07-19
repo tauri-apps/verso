@@ -46,7 +46,7 @@ jobs:
 
       # Needed by stylo, see https://github.com/servo/stylo/pull/215
       - name: Install pygments
-        run: uv pip install pygments
+        run: uv pip install pygments --system
 
       - name: Check
         run: cargo check
@@ -68,7 +68,7 @@ jobs:
 
       # Needed by stylo, see https://github.com/servo/stylo/pull/215
       - name: Install pygments
-        run: uv pip install pygments
+        run: uv pip install pygments --system
 
       # Mozangle needs Clang 19+
       # see https://github.com/tauri-apps/verso/actions/runs/15916377747/job/44894669786?pr=20
@@ -97,7 +97,7 @@ jobs:
 
       # Needed by stylo, see https://github.com/servo/stylo/pull/215
       - name: Install pygments
-        run: uv pip install pygments
+        run: uv pip install pygments --system
 
       - name: Install dependencies
         run: |
