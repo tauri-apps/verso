@@ -99,6 +99,12 @@ impl VersoBuilder {
         self
     }
 
+    /// Start remote WebDriver server on port
+    pub fn webdriver_port(mut self, port: u16) -> Self {
+        self.0.webdriver_port = Some(port);
+        self
+    }
+
     /// Sets the profiler settings.
     pub fn profiler_settings(mut self, settings: ProfilerSettings) -> Self {
         self.0.profiler_settings = Some(settings);
