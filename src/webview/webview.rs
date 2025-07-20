@@ -4,8 +4,7 @@ use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 use crossbeam_channel::Sender;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, ConfirmResponse, ContextMenuResult, EmbedderMsg, LoadStatus,
-    PromptResponse, SimpleDialog, TraversalId, ViewportDetails, WebDriverCommandMsg,
-    WebDriverJSResult, WebDriverScriptCommand,
+    PromptResponse, SimpleDialog, TraversalId, ViewportDetails,
 };
 use euclid::Scale;
 use ipc_channel::ipc;
@@ -17,6 +16,7 @@ use webrender_api::units::{DevicePoint, DeviceRect};
 use crate::{
     bookmark::BookmarkManager,
     compositor::IOCompositor,
+    javascript_evaluator::JavaScriptEvaluator,
     tab::{TabActivateRequest, TabCloseRequest, TabCreateResponse},
     verso::send_to_constellation,
     webview::{
@@ -83,6 +83,7 @@ impl Window {
         to_controller_sender: &Option<ipc::IpcSender<ToControllerMessage>>,
         clipboard: Option<&mut Clipboard>,
         compositor: &mut IOCompositor,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         log::trace!("Verso WebView {webview_id:?} is handling Embedder message: {message:?}",);
         match message {
@@ -132,7 +133,11 @@ impl Window {
                         serde_json::to_string(&webview_id).unwrap(),
                         title.as_str()
                     );
-                    let _ = execute_script(sender, &panel.webview.webview_id, script);
+                    javascript_evaluator.evaluate_ignore_result(
+                        sender,
+                        &panel.webview.webview_id,
+                        script,
+                    );
                 }
             }
             EmbedderMsg::AllowNavigationRequest(_webview_id, id, url) => {
@@ -233,12 +238,12 @@ impl Window {
                 let prev_btn_enabled = index > 0;
                 let next_btn_enabled = index < list.len() - 1;
                 if let Some(panel) = self.panel.as_ref() {
-                    let _ = execute_script(
+                    javascript_evaluator.evaluate_ignore_result(
                         sender,
                         &panel.webview.webview_id,
                         format!("window.navbar.setNavbarUrl('{}')", url.as_str()),
                     );
-                    let _ = execute_script(
+                    javascript_evaluator.evaluate_ignore_result(
                         sender,
                         &panel.webview.webview_id,
                         format!(
@@ -418,6 +423,7 @@ impl Window {
         clipboard: Option<&mut Clipboard>,
         compositor: &mut IOCompositor,
         bookmark_manager: &mut BookmarkManager,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) -> bool {
         log::trace!("Verso Panel {panel_id:?} is handling Embedder message: {message:?}",);
         match message {
@@ -448,7 +454,11 @@ impl Window {
                         EmbedderToConstellationMessage::FocusWebView(panel_id),
                     );
 
-                    self.create_tab(sender, self.panel.as_ref().unwrap().initial_url.clone());
+                    self.create_tab(
+                        sender,
+                        self.panel.as_ref().unwrap().initial_url.clone(),
+                        javascript_evaluator,
+                    );
                 }
             },
             EmbedderMsg::AllowNavigationRequest(_webview_id, id, _url) => {
@@ -494,7 +504,12 @@ impl Window {
                             let _ = response_sender.send(PromptResponse::default());
 
                             // FIXME: set dirty flag, and only resize when flag is set
-                            self.activate_tab(compositor, tab_id, self.tab_manager.count() > 1);
+                            self.activate_tab(
+                                compositor,
+                                tab_id,
+                                self.tab_manager.count() > 1,
+                                javascript_evaluator,
+                            );
 
                             return false;
                         } else if message == "NEW_TAB" {
@@ -591,7 +606,7 @@ impl Window {
                                                 .unwrap()
                                         );
                                         if let Some(panel) = self.panel.as_ref() {
-                                            let _ = execute_script(
+                                            javascript_evaluator.evaluate_ignore_result(
                                                 sender,
                                                 &panel.webview.webview_id,
                                                 script,
@@ -891,21 +906,4 @@ impl Window {
         }
         false
     }
-}
-
-/// Blocking execute a script on this webview
-pub fn execute_script(
-    constellation_sender: &Sender<EmbedderToConstellationMessage>,
-    webview: &WebViewId,
-    js: impl ToString,
-) -> WebDriverJSResult {
-    let (result_sender, result_receiver) = ipc::channel::<WebDriverJSResult>().unwrap();
-    send_to_constellation(
-        constellation_sender,
-        EmbedderToConstellationMessage::WebDriverCommand(WebDriverCommandMsg::ScriptCommand(
-            webview.0,
-            WebDriverScriptCommand::ExecuteScript(js.to_string(), result_sender),
-        )),
-    );
-    result_receiver.recv().unwrap()
 }

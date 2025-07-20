@@ -6,7 +6,7 @@ use crossbeam_channel::Sender;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg, ImeEvent, InputEvent,
     MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeaveEvent, MouseMoveEvent,
-    Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails, WebDriverJSValue,
+    Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails,
     WebResourceResponseMsg, WheelMode,
 };
 use euclid::{Point2D, Scale, Size2D};
@@ -48,11 +48,12 @@ use winit::{
 use crate::{
     bookmark::BookmarkManager,
     compositor::IOCompositor,
+    javascript_evaluator::JavaScriptEvaluator,
     keyboard::keyboard_event_from_winit,
     rendering::{RenderingContext, gl_config_picker},
     tab::TabManager,
     verso::send_to_constellation,
-    webview::{Panel, WebView, execute_script, prompt::PromptSender, webview_menu::WebViewMenu},
+    webview::{Panel, WebView, prompt::PromptSender, webview_menu::WebViewMenu},
 };
 
 use arboard::Clipboard;
@@ -274,6 +275,7 @@ impl Window {
         &mut self,
         constellation_sender: &Sender<EmbedderToConstellationMessage>,
         initial_url: ServoUrl,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         let webview_id = WebViewId::new();
         let size = self.size().to_f32();
@@ -299,7 +301,11 @@ impl Window {
                 true,
             );
 
-            let _ = execute_script(constellation_sender, &panel.webview.webview_id, cmd);
+            javascript_evaluator.evaluate_ignore_result(
+                constellation_sender,
+                &panel.webview.webview_id,
+                cmd,
+            );
         }
 
         self.tab_manager.append_tab(webview, true);
@@ -312,26 +318,26 @@ impl Window {
     }
 
     /// Close a tab
-    pub fn close_tab(&mut self, compositor: &mut IOCompositor, tab_id: WebViewId) {
+    pub fn close_tab(
+        &mut self,
+        compositor: &mut IOCompositor,
+        tab_id: WebViewId,
+        javascript_evaluator: &mut JavaScriptEvaluator,
+    ) {
         // if there are more than 2 tabs, we need to ask for the new active tab after tab is closed
         if self.tab_manager.count() > 1 {
             if let Some(panel) = &self.panel {
                 let cmd: String = format!(
-                    "window.navbar.closeTab('{}')",
+                    "const nextTab = window.navbar.closeTab('{}');",
                     serde_json::to_string(&tab_id).unwrap()
                 );
+                let activate_next_tab = r#"if (nextTab) window.prompt(`ACTIVATE_TAB:${JSON.stringify({ id: nextTab })}`)"#;
 
-                let active_tab_id = execute_script(
+                javascript_evaluator.evaluate_ignore_result(
                     &compositor.constellation_chan,
                     &panel.webview.webview_id,
-                    cmd,
-                )
-                .unwrap();
-
-                if let WebDriverJSValue::String(resp) = active_tab_id {
-                    let active_id: WebViewId = serde_json::from_str(&resp).unwrap();
-                    self.activate_tab(compositor, active_id, self.tab_manager.count() > 2);
-                }
+                    format!("{cmd}{activate_next_tab}"),
+                );
             }
         }
         send_to_constellation(
@@ -346,6 +352,7 @@ impl Window {
         compositor: &mut IOCompositor,
         tab_id: WebViewId,
         show_tab: bool,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         let size = self.size().to_f32();
         let rect = DeviceRect::from_size(size);
@@ -379,7 +386,7 @@ impl Window {
                 let history = self.tab_manager.history(tab_id).unwrap();
                 let prev_btn_enabled = history.current_idx > 0;
                 let next_btn_enabled = history.current_idx < history.list.len() - 1;
-                let _ = execute_script(
+                javascript_evaluator.evaluate_ignore_result(
                     &compositor.constellation_chan,
                     &self.panel.as_ref().unwrap().webview.webview_id,
                     format!(
@@ -400,6 +407,7 @@ impl Window {
         sender: &Sender<EmbedderToConstellationMessage>,
         compositor: &mut IOCompositor,
         event: &winit::event::WindowEvent,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         match event {
             WindowEvent::RedrawRequested => {
@@ -661,7 +669,7 @@ impl Window {
                 log::trace!("Verso is handling {:?}", event);
 
                 /* Window operation keyboard shortcut */
-                if self.handle_keyboard_shortcut(compositor, &event) {
+                if self.handle_keyboard_shortcut(compositor, &event, javascript_evaluator) {
                     return;
                 }
                 forward_input_event(
@@ -696,6 +704,7 @@ impl Window {
         &mut self,
         compositor: &mut IOCompositor,
         event: &KeyboardEvent,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) -> bool {
         let is_macos = cfg!(target_os = "macos");
         let control_or_meta = if is_macos {
@@ -711,12 +720,13 @@ impl Window {
                     (*self).create_tab(
                         &compositor.constellation_chan,
                         ServoUrl::parse("https://example.com").unwrap(),
+                        javascript_evaluator,
                     );
                     return true;
                 }
                 (modifiers, Code::KeyW) if modifiers == control_or_meta => {
                     if let Some(tab_id) = self.tab_manager.current_tab_id() {
-                        (*self).close_tab(compositor, tab_id);
+                        (*self).close_tab(compositor, tab_id, javascript_evaluator);
                     }
                     return true;
                 }
@@ -737,6 +747,7 @@ impl Window {
         clipboard: Option<&mut Clipboard>,
         compositor: &mut IOCompositor,
         bookmark_manager: &mut BookmarkManager,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) -> bool {
         match message {
             EmbedderMsg::SetCursor(_, cursor) => {
@@ -808,6 +819,7 @@ impl Window {
                     clipboard,
                     compositor,
                     bookmark_manager,
+                    javascript_evaluator,
                 );
             }
         }
@@ -834,6 +846,7 @@ impl Window {
             to_controller_sender,
             clipboard,
             compositor,
+            javascript_evaluator,
         );
         false
     }
