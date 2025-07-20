@@ -221,8 +221,12 @@ impl VersoviewController {
     }
 
     /// Execute script
-    pub fn execute_script(&self, script: String) -> Result<(), Box<ipc_channel::ErrorKind>> {
-        self.sender.send(ToVersoMessage::ExecuteScript(script))
+    pub fn execute_script<S: Into<String>>(
+        &self,
+        script: S,
+    ) -> Result<(), Box<ipc_channel::ErrorKind>> {
+        self.sender
+            .send(ToVersoMessage::ExecuteScript(script.into()))
     }
 
     /// Navigate to url
