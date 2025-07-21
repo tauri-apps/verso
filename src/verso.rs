@@ -46,7 +46,7 @@ use crate::{
     bookmark::BookmarkManager,
     compositor::{IOCompositor, InitialCompositorState, ShutdownState},
     config::{Config, parse_cli_args, to_winit_theme, to_winit_window_level},
-    webview::execute_script,
+    javascript_evaluator::JavaScriptEvaluator,
     window::Window,
 };
 
@@ -66,6 +66,7 @@ pub struct Verso {
     clipboard: Option<Clipboard>,
     config: Config,
     bookmark_manager: BookmarkManager,
+    javascript_evaluator: JavaScriptEvaluator,
 }
 
 impl Verso {
@@ -279,13 +280,25 @@ impl Verso {
             );
 
         // Create webdriver thread
-        let webdriver_receiver = if let Some(port) = opts.webdriver_port {
+        let webdriver_receiver = if let Some(port) = config.webdriver_port {
             let (embedder_sender, embedder_receiver) = unbounded();
+            let (webdriver_response_sender, webdriver_response_receiver) = ipc::channel().unwrap();
+
+            // Set the WebDriver response sender to constellation.
+            // TODO: consider using Servo API to notify embedder about input events completions
+            constellation_sender
+                .send(EmbedderToConstellationMessage::SetWebDriverResponseSender(
+                    webdriver_response_sender,
+                ))
+                .unwrap_or_else(|_| {
+                    log::warn!("Failed to set WebDriver response sender in constellation");
+                });
             webdriver_server::start_server(
                 port,
                 constellation_sender.clone(),
                 embedder_sender,
                 event_loop_waker.clone(),
+                webdriver_response_receiver,
             );
             Some(embedder_receiver)
         } else {
@@ -318,10 +331,16 @@ impl Verso {
             compositor.on_zoom_window_event(zoom_level, &window);
         }
 
+        let mut javascript_evaluator = JavaScriptEvaluator::new();
+
         if with_panel {
             window.create_panel(&constellation_sender, initial_url);
         } else {
-            window.create_tab(&constellation_sender, initial_url.into());
+            window.create_tab(
+                &constellation_sender,
+                initial_url.into(),
+                &mut javascript_evaluator,
+            );
         }
 
         let mut windows = HashMap::new();
@@ -339,6 +358,7 @@ impl Verso {
             clipboard: Clipboard::new().ok(),
             config,
             bookmark_manager: BookmarkManager::new(),
+            javascript_evaluator,
         };
 
         verso.setup_logging();
@@ -409,7 +429,12 @@ impl Verso {
             // self.windows.remove(&window_id);
             compositor.start_shutting_down();
         } else {
-            window.handle_winit_window_event(&self.constellation_sender, compositor, &event);
+            window.handle_winit_window_event(
+                &self.constellation_sender,
+                compositor,
+                &event,
+                &mut self.javascript_evaluator,
+            );
             return window.resizing;
         }
 
@@ -445,6 +470,7 @@ impl Verso {
                         self.clipboard.as_mut(),
                         compositor,
                         &mut self.bookmark_manager,
+                        &mut self.javascript_evaluator,
                     ) {
                         let mut window = Window::new_with_compositor(
                             evl,
@@ -476,6 +502,10 @@ impl Verso {
                                 "Failed to send RequestDevtoolsConnection response back: {err}"
                             );
                         }
+                    }
+                    EmbedderMsg::FinishJavaScriptEvaluation(evaluation_id, result) => {
+                        self.javascript_evaluator
+                            .finish_evaluation(evaluation_id, result);
                     }
                     EmbedderMsg::ShutdownComplete => {
                         compositor.finish_shutting_down();
@@ -563,7 +593,9 @@ impl Verso {
             EmbedderMsg::ShowFormControl(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShutdownComplete => None,
             EmbedderMsg::FinishJavaScriptEvaluation(..) => None,
-            EmbedderMsg::WebDriverCommand(..) => None,
+            EmbedderMsg::HistoryTraversalComplete(webview_id, ..) => Some(webview_id),
+            EmbedderMsg::GetWindowRect(webview_id, ..) => Some(webview_id),
+            EmbedderMsg::GetScreenMetrics(webview_id, ..) => Some(webview_id),
         }
     }
 
@@ -664,7 +696,11 @@ impl Verso {
             }
             ToVersoMessage::ExecuteScript(js) => {
                 if let Some(webview_id) = self.first_webview_id() {
-                    let _ = execute_script(&self.constellation_sender, &webview_id, js);
+                    self.javascript_evaluator.evaluate_ignore_result(
+                        &self.constellation_sender,
+                        &webview_id,
+                        js,
+                    );
                 }
             }
             ToVersoMessage::ListenToWebResourceRequests => {

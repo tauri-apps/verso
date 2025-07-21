@@ -6,7 +6,7 @@ use crossbeam_channel::Sender;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg, ImeEvent, InputEvent,
     MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeaveEvent, MouseMoveEvent,
-    Notification, PromptResponse, TouchEventType, ViewportDetails, WebDriverJSValue,
+    Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails,
     WebResourceResponseMsg, WheelMode,
 };
 use euclid::{Point2D, Scale, Size2D};
@@ -25,11 +25,15 @@ use muda::{MenuEvent, MenuEventReceiver};
 use notify_rust::Image;
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
+use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
 use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
 use webrender_api::{
     ScrollLocation,
-    units::{DeviceIntPoint, DevicePixel, DevicePoint, DeviceRect, DeviceSize, LayoutVector2D},
+    units::{
+        DeviceIntPoint, DeviceIntRect, DevicePixel, DevicePoint, DeviceRect, DeviceSize,
+        LayoutVector2D,
+    },
 };
 #[cfg(any(linux, target_os = "windows"))]
 use winit::window::ResizeDirection;
@@ -44,11 +48,12 @@ use winit::{
 use crate::{
     bookmark::BookmarkManager,
     compositor::IOCompositor,
+    javascript_evaluator::JavaScriptEvaluator,
     keyboard::keyboard_event_from_winit,
     rendering::{RenderingContext, gl_config_picker},
     tab::TabManager,
     verso::send_to_constellation,
-    webview::{Panel, WebView, execute_script, prompt::PromptSender, webview_menu::WebViewMenu},
+    webview::{Panel, WebView, prompt::PromptSender, webview_menu::WebViewMenu},
 };
 
 use arboard::Clipboard;
@@ -270,6 +275,7 @@ impl Window {
         &mut self,
         constellation_sender: &Sender<EmbedderToConstellationMessage>,
         initial_url: ServoUrl,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         let webview_id = WebViewId::new();
         let size = self.size().to_f32();
@@ -295,7 +301,11 @@ impl Window {
                 true,
             );
 
-            let _ = execute_script(constellation_sender, &panel.webview.webview_id, cmd);
+            javascript_evaluator.evaluate_ignore_result(
+                constellation_sender,
+                &panel.webview.webview_id,
+                cmd,
+            );
         }
 
         self.tab_manager.append_tab(webview, true);
@@ -308,26 +318,26 @@ impl Window {
     }
 
     /// Close a tab
-    pub fn close_tab(&mut self, compositor: &mut IOCompositor, tab_id: WebViewId) {
+    pub fn close_tab(
+        &mut self,
+        compositor: &mut IOCompositor,
+        tab_id: WebViewId,
+        javascript_evaluator: &mut JavaScriptEvaluator,
+    ) {
         // if there are more than 2 tabs, we need to ask for the new active tab after tab is closed
         if self.tab_manager.count() > 1 {
             if let Some(panel) = &self.panel {
                 let cmd: String = format!(
-                    "window.navbar.closeTab('{}')",
+                    "const nextTab = window.navbar.closeTab('{}');",
                     serde_json::to_string(&tab_id).unwrap()
                 );
+                let activate_next_tab = r#"if (nextTab) window.prompt(`ACTIVATE_TAB:${JSON.stringify({ id: nextTab })}`)"#;
 
-                let active_tab_id = execute_script(
+                javascript_evaluator.evaluate_ignore_result(
                     &compositor.constellation_chan,
                     &panel.webview.webview_id,
-                    cmd,
-                )
-                .unwrap();
-
-                if let WebDriverJSValue::String(resp) = active_tab_id {
-                    let active_id: WebViewId = serde_json::from_str(&resp).unwrap();
-                    self.activate_tab(compositor, active_id, self.tab_manager.count() > 2);
-                }
+                    format!("{cmd}{activate_next_tab}"),
+                );
             }
         }
         send_to_constellation(
@@ -342,6 +352,7 @@ impl Window {
         compositor: &mut IOCompositor,
         tab_id: WebViewId,
         show_tab: bool,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         let size = self.size().to_f32();
         let rect = DeviceRect::from_size(size);
@@ -375,7 +386,7 @@ impl Window {
                 let history = self.tab_manager.history(tab_id).unwrap();
                 let prev_btn_enabled = history.current_idx > 0;
                 let next_btn_enabled = history.current_idx < history.list.len() - 1;
-                let _ = execute_script(
+                javascript_evaluator.evaluate_ignore_result(
                     &compositor.constellation_chan,
                     &self.panel.as_ref().unwrap().webview.webview_id,
                     format!(
@@ -396,6 +407,7 @@ impl Window {
         sender: &Sender<EmbedderToConstellationMessage>,
         compositor: &mut IOCompositor,
         event: &winit::event::WindowEvent,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         match event {
             WindowEvent::RedrawRequested => {
@@ -657,7 +669,7 @@ impl Window {
                 log::trace!("Verso is handling {:?}", event);
 
                 /* Window operation keyboard shortcut */
-                if self.handle_keyboard_shortcut(compositor, &event) {
+                if self.handle_keyboard_shortcut(compositor, &event, javascript_evaluator) {
                     return;
                 }
                 forward_input_event(
@@ -692,6 +704,7 @@ impl Window {
         &mut self,
         compositor: &mut IOCompositor,
         event: &KeyboardEvent,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) -> bool {
         let is_macos = cfg!(target_os = "macos");
         let control_or_meta = if is_macos {
@@ -707,12 +720,13 @@ impl Window {
                     (*self).create_tab(
                         &compositor.constellation_chan,
                         ServoUrl::parse("https://example.com").unwrap(),
+                        javascript_evaluator,
                     );
                     return true;
                 }
                 (modifiers, Code::KeyW) if modifiers == control_or_meta => {
                     if let Some(tab_id) = self.tab_manager.current_tab_id() {
-                        (*self).close_tab(compositor, tab_id);
+                        (*self).close_tab(compositor, tab_id, javascript_evaluator);
                     }
                     return true;
                 }
@@ -733,10 +747,66 @@ impl Window {
         clipboard: Option<&mut Clipboard>,
         compositor: &mut IOCompositor,
         bookmark_manager: &mut BookmarkManager,
+        javascript_evaluator: &mut JavaScriptEvaluator,
     ) -> bool {
-        if let EmbedderMsg::SetCursor(_, cursor) = message {
-            self.set_cursor_icon(cursor);
-            return false;
+        match message {
+            EmbedderMsg::SetCursor(_, cursor) => {
+                self.set_cursor_icon(cursor);
+                return false;
+            }
+            EmbedderMsg::GetWindowRect(_, response_sender) => {
+                let scale_factor = self.window.scale_factor() as f32;
+                let position = self.window.outer_position().unwrap_or_default();
+                let size = self.window.outer_size();
+                let window_rect = DeviceIntRect::from_origin_and_size(
+                    Point2D::new(position.x, position.y),
+                    Size2D::new(size.width, size.height).to_i32(),
+                );
+                if let Err(error) = response_sender.send(convert_rect_to_css_pixel(
+                    window_rect,
+                    Scale::new(scale_factor),
+                )) {
+                    log::error!("Failed to respond to GetWindowRect: {error}");
+                }
+                return false;
+            }
+            EmbedderMsg::GetScreenMetrics(_, response_sender) => {
+                let monitor = self.window.current_monitor();
+                let screen_size = monitor
+                    .as_ref()
+                    .map(|monitor| monitor.size().cast())
+                    .unwrap_or_default();
+                let scale_factor = monitor
+                    .as_ref()
+                    .map(|monitor| monitor.scale_factor() as f32)
+                    .unwrap_or_default();
+                // let toolbar_size = Size2D::new(
+                //     0.0,
+                //     (self.toolbar_height.get() * self.hidpi_scale_factor()).0,
+                // );
+                // let screen_size = self.screen_size.to_f32() * hidpi_factor;
+
+                // // FIXME: In reality, this should subtract screen space used by the system interface
+                // // elements, but it is difficult to get this value with `winit` currently. See:
+                // // See https://github.com/rust-windowing/winit/issues/2494
+                // let available_screen_size = screen_size - toolbar_size;
+
+                let screen_metrics = ScreenMetrics {
+                    screen_size: convert_size_to_css_pixel(
+                        Size2D::new(screen_size.width, screen_size.height),
+                        Scale::new(scale_factor),
+                    ),
+                    available_size: convert_size_to_css_pixel(
+                        Size2D::new(screen_size.width, screen_size.height),
+                        Scale::new(scale_factor),
+                    ),
+                };
+                if let Err(error) = response_sender.send(screen_metrics) {
+                    log::error!("Failed to respond to GetScreenMetrics: {error}");
+                }
+                return false;
+            }
+            _ => {}
         }
 
         // Handle message in Verso Panel
@@ -749,6 +819,7 @@ impl Window {
                     clipboard,
                     compositor,
                     bookmark_manager,
+                    javascript_evaluator,
                 );
             }
         }
@@ -775,6 +846,7 @@ impl Window {
             to_controller_sender,
             clipboard,
             compositor,
+            javascript_evaluator,
         );
         false
     }

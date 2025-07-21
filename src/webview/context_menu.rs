@@ -1,9 +1,9 @@
 use crate::verso::send_to_constellation;
 use crate::window::Window;
 use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
-use embedder_traits::ContextMenuResult;
 #[cfg(linux)]
 use embedder_traits::ViewportDetails;
+use embedder_traits::{ContextMenuResult, TraversalId};
 use ipc_channel::ipc::IpcSender;
 
 /* macOS, Windows Native Implementation */
@@ -304,6 +304,7 @@ impl Window {
                     EmbedderToConstellationMessage::TraverseHistory(
                         active_tab.id(),
                         TraversalDirection::Back(1),
+                        TraversalId::new(),
                     ),
                 );
             }
@@ -313,6 +314,7 @@ impl Window {
                     EmbedderToConstellationMessage::TraverseHistory(
                         active_tab.id(),
                         TraversalDirection::Forward(1),
+                        TraversalId::new(),
                     ),
                 );
             }
@@ -345,6 +347,7 @@ impl Window {
                             EmbedderToConstellationMessage::TraverseHistory(
                                 tab_id,
                                 TraversalDirection::Back(1),
+                                TraversalId::new(),
                             ),
                         );
                     }
@@ -354,6 +357,7 @@ impl Window {
                             EmbedderToConstellationMessage::TraverseHistory(
                                 tab_id,
                                 TraversalDirection::Forward(1),
+                                TraversalId::new(),
                             ),
                         );
                     }

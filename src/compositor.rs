@@ -26,7 +26,7 @@ use dpi::PhysicalSize;
 use embedder_traits::{
     AnimationState, CompositorHitTestResult, Cursor, InputEvent, MouseButton, MouseButtonAction,
     MouseButtonEvent, MouseMoveEvent, TouchEvent, TouchEventType, TouchId, UntrustedNodeAddress,
-    ViewportDetails, WheelDelta, WheelEvent, WheelMode,
+    ViewportDetails,
 };
 use euclid::{Point2D, Scale, Size2D, Transform3D, Vector2D, vec2};
 use gleam::gl;
@@ -36,7 +36,7 @@ use profile_traits::mem::{ProcessReports, Report, ReportKind};
 use profile_traits::time::{self as profile_time, ProfilerCategory};
 use profile_traits::{mem, path, time, time_profile};
 use servo_config::pref;
-use servo_geometry::{DeviceIndependentIntSize, DeviceIndependentPixel};
+use servo_geometry::DeviceIndependentPixel;
 use style_traits::CSSPixel;
 use webrender::{RenderApi, Transaction};
 use webrender_api::units::{
@@ -332,10 +332,6 @@ impl PipelineDetails {
         self.scroll_tree.set_all_scroll_offsets(&old_scroll_offsets);
     }
 
-    pub(crate) fn animations_or_animation_callbacks_running(&self) -> bool {
-        self.animations_running || self.animation_callbacks_running
-    }
-
     pub(crate) fn animation_callbacks_running(&self) -> bool {
         self.animation_callbacks_running
     }
@@ -604,33 +600,6 @@ impl IOCompositor {
                 }
             }
 
-            CompositorMsg::WebDriverMouseButtonEvent(
-                webview_id,
-                action,
-                button,
-                x,
-                y,
-                webdriver_id,
-            ) => {
-                let dppx = self.device_pixels_per_page_pixel();
-                let point = dppx.transform_point(Point2D::new(x, y));
-                self.dispatch_input_event(
-                    webview_id,
-                    InputEvent::MouseButton(MouseButtonEvent::new(action, button, point))
-                        .with_webdriver_message_id(webdriver_id),
-                );
-            }
-
-            CompositorMsg::WebDriverMouseMoveEvent(webview_id, x, y, webdriver_id) => {
-                let dppx = self.device_pixels_per_page_pixel();
-                let point = dppx.transform_point(Point2D::new(x, y));
-                self.dispatch_input_event(
-                    webview_id,
-                    InputEvent::MouseMove(MouseMoveEvent::new(point))
-                        .with_webdriver_message_id(webdriver_id),
-                );
-            }
-
             CompositorMsg::SendInitialTransaction(pipeline) => {
                 let mut txn = Transaction::new();
                 txn.set_display_list(WebRenderEpoch(0), (pipeline, Default::default()));
@@ -857,62 +826,6 @@ impl IOCompositor {
                 let _ = result_sender.send((font_keys, font_instance_keys));
             }
 
-            CompositorMsg::GetClientWindowRect(_webview_id, response_sender) => {
-                // TODO: use ScreenGeometry and bring webviews to compositor. https://github.com/servo/servo/pull/36223
-                if let Err(error) =
-                    response_sender.send(self.device_independent_int_size_viewport().into())
-                {
-                    warn!("Sending response to get client window failed ({error:?}).");
-                }
-            }
-
-            CompositorMsg::GetScreenSize(_webview_id, response_sender) => {
-                // TODO: use ScreenGeometry and bring webviews to compositor. https://github.com/servo/servo/pull/36223
-                if let Err(error) =
-                    response_sender.send(self.device_independent_int_size_viewport())
-                {
-                    warn!("Sending response to get screen size failed ({error:?}).");
-                }
-            }
-
-            CompositorMsg::GetAvailableScreenSize(_webview_id, response_sender) => {
-                // TODO: use ScreenGeometry and bring webviews to compositor. https://github.com/servo/servo/pull/36223
-                if let Err(error) =
-                    response_sender.send(self.device_independent_int_size_viewport())
-                {
-                    warn!("Sending response to get screen size failed ({error:?}).");
-                }
-            }
-            CompositorMsg::WebDriverWheelScrollEvent(
-                webview_id,
-                x,
-                y,
-                delta_x,
-                delta_y,
-                message_id,
-            ) => {
-                let delta = WheelDelta {
-                    x: delta_x,
-                    y: delta_y,
-                    z: 0.0,
-                    mode: WheelMode::DeltaPixel,
-                };
-                let dppx = self.device_pixels_per_page_pixel();
-                let point = dppx.transform_point(Point2D::new(x, y));
-                let scroll_delta =
-                    dppx.transform_vector(Vector2D::new(delta_x as f32, delta_y as f32));
-
-                let scroll_location =
-                    ScrollLocation::Delta(LayoutVector2D::from_untyped(scroll_delta.to_untyped()));
-                let cursor = DeviceIntPoint::new(point.x as i32, point.y as i32);
-                self.dispatch_input_event(
-                    webview_id,
-                    InputEvent::Wheel(WheelEvent::new(delta, point))
-                        .with_webdriver_message_id(message_id),
-                );
-                self.on_scroll_window_event(scroll_location, cursor);
-            }
-
             CompositorMsg::Viewport(_webview_id, viewport_description) => {
                 self.pending_scroll_zoom_events
                     .push(ScrollZoomEvent::ViewportZoom(
@@ -956,21 +869,6 @@ impl IOCompositor {
                     .map(|_| self.webrender_api.generate_font_instance_key())
                     .collect();
                 let _ = result_sender.send((font_keys, font_instance_keys));
-            }
-            CompositorMsg::GetClientWindowRect(_, response_sender) => {
-                if let Err(error) = response_sender.send(Default::default()) {
-                    warn!("Sending response to get client window failed ({error:?}).");
-                }
-            }
-            CompositorMsg::GetScreenSize(_, response_sender) => {
-                if let Err(error) = response_sender.send(Default::default()) {
-                    warn!("Sending response to get client window failed ({error:?}).");
-                }
-            }
-            CompositorMsg::GetAvailableScreenSize(_, response_sender) => {
-                if let Err(error) = response_sender.send(Default::default()) {
-                    warn!("Sending response to get client window failed ({error:?}).");
-                }
             }
             CompositorMsg::NewWebRenderFrameReady(..) => {
                 // Subtract from the number of pending frames, but do not do any compositing.
@@ -1954,10 +1852,6 @@ impl IOCompositor {
         Scale::new(self.scale_factor.get())
     }
 
-    fn device_independent_int_size_viewport(&self) -> DeviceIndependentIntSize {
-        (self.viewport.to_f32() / self.scale_factor).to_i32()
-    }
-
     /// Handle zoom reset event
     pub fn on_zoom_reset_window_event(&mut self, window: &Window) {
         if self.shutdown_state != ShutdownState::NotShuttingDown {
@@ -2020,13 +1914,6 @@ impl IOCompositor {
                 pipeline_id,
                 scroll_offsets,
             ));
-    }
-
-    // Check if any pipelines currently have active animations or animation callbacks.
-    fn animations_or_animation_callbacks_running(&self) -> bool {
-        self.pipeline_details
-            .values()
-            .any(PipelineDetails::animations_or_animation_callbacks_running)
     }
 
     /// Returns true if any animation callbacks (ie `requestAnimationFrame`) are waiting for a response.
@@ -2125,15 +2012,6 @@ impl IOCompositor {
         let wait_for_stable_image = self.wait_for_stable_image;
 
         if wait_for_stable_image {
-            // The current image may be ready to output. However, if there are animations active,
-            // tick those instead and continue waiting for the image output to be stable AND
-            // all active animations to complete.
-            if self.animations_or_animation_callbacks_running() {
-                self.process_animations(false);
-                return Err(UnableToComposite::NotReadyToPaintImage(
-                    NotReadyToPaint::AnimationsActive,
-                ));
-            }
             if let Err(result) = self.is_ready_to_paint_image_output() {
                 return Err(UnableToComposite::NotReadyToPaintImage(result));
             }
@@ -2351,7 +2229,6 @@ enum UnableToComposite {
 
 #[derive(Debug, PartialEq)]
 enum NotReadyToPaint {
-    AnimationsActive,
     JustNotifiedConstellation,
     WaitingOnConstellation,
 }

@@ -47,6 +47,8 @@ pub struct CliArgs {
     pub no_maximized: bool,
     /// Port number to start a server to listen to remote Firefox devtools connections. 0 for random port.
     pub devtools_port: Option<u16>,
+    /// Start remote WebDriver server on port
+    pub webdriver_port: Option<u16>,
     /// Servo time profile settings
     pub profiler_settings: Option<versoview_messages::ProfilerSettings>,
     /// Path to resource directory. If None, Verso will try to get default directory. And if that
@@ -81,6 +83,12 @@ pub fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
         "devtools-port",
         "Launch Verso with devtools server enabled and listen to port",
         "1234",
+    );
+    opts.optopt(
+        "",
+        "webdriver-port",
+        "Start remote WebDriver server on port",
+        "7000",
     );
     opts.optopt(
         "p",
@@ -174,6 +182,12 @@ pub fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
         log::error!("Failed to parse devtools-port command line argument: {e}");
         None
     });
+    let webdriver_port = matches
+        .opt_get::<u16>("webdriver-port")
+        .unwrap_or_else(|e| {
+            log::error!("Failed to parse webdriver-port command line argument: {e}");
+            None
+        });
 
     let profiler_settings = if let Ok(Some(profiler_interval)) = matches.opt_get("profiler") {
         let profile_output = matches.opt_str("profiler-output-file");
@@ -249,6 +263,7 @@ pub fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
         ipc_channel,
         no_panel,
         devtools_port,
+        webdriver_port,
         profiler_settings,
         user_agent,
         init_script,
@@ -271,6 +286,8 @@ pub struct Config {
     pub window_attributes: WindowAttributes,
     /// Port number to start a server to listen to remote Firefox devtools connections. 0 for random port.
     pub devtools_port: Option<u16>,
+    /// Start remote WebDriver server on port
+    pub webdriver_port: Option<u16>,
     /// Servo time profile settings
     pub profiler_settings: Option<ProfilerSettings>,
     /// Override the user agent
@@ -375,6 +392,7 @@ impl Config {
             with_panel,
             window_attributes,
             devtools_port: config.devtools_port,
+            webdriver_port: config.webdriver_port,
             profiler_settings,
             user_agent,
             user_scripts: config

@@ -4,7 +4,7 @@ use crate::{verso::send_to_constellation, window::Window};
 use base::id::WebViewId;
 use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 use crossbeam_channel::Sender;
-use embedder_traits::ViewportDetails;
+use embedder_traits::{TraversalId, ViewportDetails};
 use serde::{Deserialize, Serialize};
 use servo_url::ServoUrl;
 use std::fmt;
@@ -202,6 +202,7 @@ impl Window {
                             EmbedderToConstellationMessage::TraverseHistory(
                                 tab_id,
                                 TraversalDirection::Back(index + 1),
+                                TraversalId::new(),
                             ),
                         );
                     }
@@ -211,6 +212,7 @@ impl Window {
                             EmbedderToConstellationMessage::TraverseHistory(
                                 tab_id,
                                 TraversalDirection::Forward(index + 1),
+                                TraversalId::new(),
                             ),
                         );
                     }
