@@ -21,8 +21,6 @@ Verso is still under development. We don't accept feature requests at the moment
 
 ```sh
 scoop install git python uv llvm cmake curl
-# Needed by stylo, see https://github.com/servo/stylo/pull/215
-pip install markupsafe
 ```
 
 > You can also use chocolatey to install if you prefer it.
@@ -40,8 +38,6 @@ cargo run
 
 ```sh
 brew install cmake pkg-config harfbuzz uv
-# Needed by stylo, see https://github.com/servo/stylo/pull/215
-pip install markupsafe
 ```
 
 - Build & run:
