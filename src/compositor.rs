@@ -544,13 +544,6 @@ impl IOCompositor {
                 self.touch_handler.on_event_processed(result);
             }
 
-            CompositorMsg::CreatePng(_webview_id, _page_rect, reply) => {
-                // TODO create image
-                if let Err(e) = reply.send(None) {
-                    warn!("Sending reply to create png failed ({:?}).", e);
-                }
-            }
-
             CompositorMsg::IsReadyToSaveImageReply(is_ready) => {
                 assert_eq!(
                     self.ready_to_save_state,
