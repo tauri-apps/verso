@@ -3,8 +3,8 @@ use base::id::WebViewId;
 use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 use crossbeam_channel::Sender;
 use embedder_traits::{
-    AlertResponse, AllowOrDeny, ConfirmResponse, ContextMenuResult, EmbedderMsg, LoadStatus,
-    PromptResponse, SimpleDialog, TraversalId, ViewportDetails,
+    AlertResponse, AllowOrDeny, ConfirmResponse, ContextMenuResult, EmbedderMsg, FocusId,
+    LoadStatus, PromptResponse, SimpleDialog, TraversalId, ViewportDetails,
 };
 use euclid::Scale;
 use ipc_channel::ipc;
@@ -95,7 +95,7 @@ impl Window {
                 self.focused_webview_id = None;
                 self.close_webview_menu(sender);
             }
-            EmbedderMsg::WebViewFocused(w) => {
+            EmbedderMsg::WebViewFocused(w, ..) => {
                 self.focused_webview_id = Some(webview_id);
                 self.close_webview_menu(sender);
 
@@ -113,7 +113,7 @@ impl Window {
                     self.window.request_redraw();
                     send_to_constellation(
                         sender,
-                        EmbedderToConstellationMessage::FocusWebView(webview_id),
+                        EmbedderToConstellationMessage::FocusWebView(webview_id, FocusId::new()),
                     );
                 }
             },
@@ -434,7 +434,7 @@ impl Window {
             EmbedderMsg::WebViewBlurred => {
                 self.focused_webview_id = None;
             }
-            EmbedderMsg::WebViewFocused(webview_id) => {
+            EmbedderMsg::WebViewFocused(webview_id, ..) => {
                 self.focused_webview_id = Some(webview_id);
                 self.close_webview_menu(sender);
                 log::debug!(
@@ -451,7 +451,7 @@ impl Window {
                     self.window.request_redraw();
                     send_to_constellation(
                         sender,
-                        EmbedderToConstellationMessage::FocusWebView(panel_id),
+                        EmbedderToConstellationMessage::FocusWebView(panel_id, FocusId::new()),
                     );
 
                     self.create_tab(
@@ -749,7 +749,7 @@ impl Window {
             EmbedderMsg::WebViewBlurred => {
                 self.focused_webview_id = None;
             }
-            EmbedderMsg::WebViewFocused(webview_id) => {
+            EmbedderMsg::WebViewFocused(webview_id, ..) => {
                 self.focused_webview_id = Some(webview_id);
             }
             EmbedderMsg::ShowSimpleDialog(_webview_id, simple_dialog) => match simple_dialog {
@@ -808,7 +808,7 @@ impl Window {
             EmbedderMsg::WebViewBlurred => {
                 self.focused_webview_id = None;
             }
-            EmbedderMsg::WebViewFocused(webview_id) => {
+            EmbedderMsg::WebViewFocused(webview_id, ..) => {
                 self.focused_webview_id = Some(webview_id);
             }
             EmbedderMsg::ShowSimpleDialog(_webview_id, simple_dialog) => match simple_dialog {

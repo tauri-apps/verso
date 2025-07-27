@@ -295,7 +295,6 @@ impl Verso {
                 });
             webdriver_server::start_server(
                 port,
-                constellation_sender.clone(),
                 embedder_sender,
                 event_loop_waker.clone(),
                 webdriver_response_receiver,
@@ -564,7 +563,7 @@ impl Verso {
             EmbedderMsg::AllowNavigationRequest(webview_id, ..) => Some(webview_id),
             EmbedderMsg::AllowOpeningWebView(webview_id, ..) => Some(webview_id),
             EmbedderMsg::WebViewClosed(webview_id) => Some(webview_id),
-            EmbedderMsg::WebViewFocused(webview_id) => Some(webview_id),
+            EmbedderMsg::WebViewFocused(webview_id, ..) => Some(webview_id),
             EmbedderMsg::WebViewBlurred => None,
             EmbedderMsg::AllowUnload(webview_id, ..) => Some(webview_id),
             EmbedderMsg::Keyboard(webview_id, ..) => Some(webview_id),
