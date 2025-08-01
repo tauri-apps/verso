@@ -1192,11 +1192,7 @@ impl IOCompositor {
         self.pipeline_details
             .iter_mut()
             .filter(|(id, _)| !attached_pipelines.contains(id))
-            .for_each(|(_, details)| {
-                details.scroll_tree.nodes.iter_mut().for_each(|node| {
-                    node.set_offset(LayoutVector2D::zero());
-                })
-            })
+            .for_each(|(_, details)| details.scroll_tree.reset_all_scroll_offsets());
     }
 
     fn create_or_update_pipeline_details_with_frame_tree(
