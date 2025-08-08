@@ -1,202 +1,587 @@
-use keyboard_types::{Code, Key, KeyState, KeyboardEvent, Location, Modifiers};
-use log::info;
-use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key as LogicalKey, KeyCode, ModifiersState, NamedKey, PhysicalKey};
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-/// Some shortcuts use Cmd on Mac and Control on other systems.
-#[cfg(macos)]
+#![allow(missing_docs)]
+
+use embedder_traits::KeyboardEvent;
+use keyboard_types::{Code, Key, KeyState, Location, Modifiers, NamedKey};
+use winit::event::{ElementState, KeyEvent};
+use winit::keyboard::{
+    Key as WinitKey, KeyCode, KeyLocation as WinitKeyLocation, ModifiersState,
+    NamedKey as WinitNamedKey, PhysicalKey,
+};
+
+// Some shortcuts use Cmd on Mac and Control on other systems.
+#[cfg(target_os = "macos")]
 pub const CMD_OR_CONTROL: Modifiers = Modifiers::META;
-/// Some shortcuts use Cmd on Mac and Control on other systems.
-#[cfg(not(macos))]
+#[cfg(not(target_os = "macos"))]
 pub const CMD_OR_CONTROL: Modifiers = Modifiers::CONTROL;
 
-/// Some shortcuts use Cmd on Mac and Alt on other systems.
-#[cfg(macos)]
+// Some shortcuts use Cmd on Mac and Alt on other systems.
+#[cfg(target_os = "macos")]
 pub const CMD_OR_ALT: Modifiers = Modifiers::META;
-/// Some shortcuts use Cmd on Mac and Alt on other systems.
-#[cfg(not(macos))]
+#[cfg(not(target_os = "macos"))]
 pub const CMD_OR_ALT: Modifiers = Modifiers::ALT;
 
-/// Maps [`LogicalKey`] to [`Key`].
-///
-/// Example:
-/// 1. `One-one mappings`:
-/// ```
-///     logical_to_winit_key!(a, Escape, F1, F2,...)
-/// ```
-/// matches [`NamedKey::Escape`] => [`Key::Escape`], [`NamedKey::F1`] => [`Key::F1`], [`NamedKey::F2`] => [`Key::F2`],...
-///
-/// 2. `Custom mappings`:
-/// ```
-///    logical_to_winit_key!(a, Escape, F1 => F2, F3)
-/// ```
-/// matches [`NamedKey::Escape`] => [`Key::Escape`], [`NamedKey::F1`] => [`Key::F2`], [`NamedKey::F3`] => [`Key::F3`],...
-macro_rules! logical_to_winit_key {
-    // Matches an optional token
-    (@opt $_: ident, $optional: expr) => {
-        $optional
-    };
-
-    (@opt $variant: ident) => {
-        Key::$variant
-    };
-
-    ($key: ident $(,$variant: ident $(=> $matchto: expr)?)+) => {
-        match $key {
-            LogicalKey::Character(c) => Key::Character(c.to_string()),
-            $(LogicalKey::Named(NamedKey::$variant) => logical_to_winit_key!(@opt $variant $(, $matchto)?),)+
-            _ => Key::Unidentified,
-        }
-    };
+trait FromWinitKeyEvent {
+    fn from_winit_key_event(key_event: &KeyEvent) -> Self;
 }
 
-fn get_servo_key_from_winit_key(key: &LogicalKey) -> Key {
-    // TODO: figure out how to map NavigateForward, NavigateBackward
-    // TODO: map the remaining keys if possible
-    logical_to_winit_key! {
-        key,
-        // printable: Key1 to Key0
-        // printable: A to Z
-        Escape, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-        // F13 to F15 are not mapped
-        PrintScreen,
-        // Scroll not mapped
-        Pause, Insert, Home, Delete, End, PageDown, PageUp,
-        ArrowLeft, ArrowUp, ArrowRight, ArrowDown,
-        Backspace, Enter,
-        Compose,
-        // Caret not mapped
-        NumLock,
-        // printable: Numpad0 to Numpad9
-        // AbntC1 and AbntC2 not mapped
-        // printable: Add, Apostrophe,
-        // Apps, At, Ax not mapped
-        // printable: Backslash,
-        LaunchApplication2, CapsLock,
-        // printable: Colon, Comma,
-        Convert,
-        // not mapped: Decimal,
-        // printable: Divide, Equals, Grave,
-        KanaMode, KanjiMode, Alt,
-        // printable: LBracket,
-        Control, Shift, Meta, LaunchMail,
-        // not mapped: MediaSelect,
-        MediaStop,
-        // printable: Minus, Multiply,
-        AudioVolumeMute, LaunchApplication1,
-        // not mapped: NavigateForward, NavigateBackward
-        MediaTrackNext, NonConvert,
-        // printable: NumpadComma, NumpadEnter, NumpadEquals,
-        // not mapped: OEM102,
-        // printable: Period,
-        MediaPlayPause, Power, MediaTrackPrevious,
-        // printable RBracket
-        // printable Semicolon, Slash
-        Standby,
-        // not mapped: Stop,
-        // printable Subtract,
-        // not mapped: Sysrq,
-        Tab,
-        // printable: Underline,
-        // not mapped: Unlabeled,
-        AudioVolumeDown, AudioVolumeUp, WakeUp, BrowserBack, BrowserFavorites, BrowserForward, BrowserHome, BrowserRefresh, BrowserSearch, BrowserStop,
-        // printable Yen,
-        Copy,
-        Paste,
-        Cut,
-        Space => Key::Character(" ".to_string())
+#[allow(deprecated)]
+impl FromWinitKeyEvent for Key {
+    fn from_winit_key_event(key_event: &KeyEvent) -> Self {
+        let named_key = match key_event.logical_key {
+            WinitKey::Named(named_key) => named_key,
+            WinitKey::Character(ref string) => return Key::Character(string.to_string()),
+            WinitKey::Unidentified(_) | WinitKey::Dead(_) => {
+                return Key::Named(NamedKey::Unidentified);
+            }
+        };
+
+        match named_key {
+            WinitNamedKey::AVRInput => Key::Named(NamedKey::AVRInput),
+            WinitNamedKey::AVRPower => Key::Named(NamedKey::AVRPower),
+            WinitNamedKey::Accept => Key::Named(NamedKey::Accept),
+            WinitNamedKey::Again => Key::Named(NamedKey::Again),
+            WinitNamedKey::AllCandidates => Key::Named(NamedKey::AllCandidates),
+            WinitNamedKey::Alphanumeric => Key::Named(NamedKey::Alphanumeric),
+            WinitNamedKey::Alt => Key::Named(NamedKey::Alt),
+            WinitNamedKey::AltGraph => Key::Named(NamedKey::AltGraph),
+            WinitNamedKey::AppSwitch => Key::Named(NamedKey::AppSwitch),
+            WinitNamedKey::ArrowDown => Key::Named(NamedKey::ArrowDown),
+            WinitNamedKey::ArrowLeft => Key::Named(NamedKey::ArrowLeft),
+            WinitNamedKey::ArrowRight => Key::Named(NamedKey::ArrowRight),
+            WinitNamedKey::ArrowUp => Key::Named(NamedKey::ArrowUp),
+            WinitNamedKey::Attn => Key::Named(NamedKey::Attn),
+            WinitNamedKey::AudioBalanceLeft => Key::Named(NamedKey::AudioBalanceLeft),
+            WinitNamedKey::AudioBalanceRight => Key::Named(NamedKey::AudioBalanceRight),
+            WinitNamedKey::AudioBassBoostDown => Key::Named(NamedKey::AudioBassBoostDown),
+            WinitNamedKey::AudioBassBoostToggle => Key::Named(NamedKey::AudioBassBoostToggle),
+            WinitNamedKey::AudioBassBoostUp => Key::Named(NamedKey::AudioBassBoostUp),
+            WinitNamedKey::AudioFaderFront => Key::Named(NamedKey::AudioFaderFront),
+            WinitNamedKey::AudioFaderRear => Key::Named(NamedKey::AudioFaderRear),
+            WinitNamedKey::AudioSurroundModeNext => Key::Named(NamedKey::AudioSurroundModeNext),
+            WinitNamedKey::AudioTrebleDown => Key::Named(NamedKey::AudioTrebleDown),
+            WinitNamedKey::AudioTrebleUp => Key::Named(NamedKey::AudioTrebleUp),
+            WinitNamedKey::AudioVolumeDown => Key::Named(NamedKey::AudioVolumeDown),
+            WinitNamedKey::AudioVolumeMute => Key::Named(NamedKey::AudioVolumeMute),
+            WinitNamedKey::AudioVolumeUp => Key::Named(NamedKey::AudioVolumeUp),
+            WinitNamedKey::Backspace => Key::Named(NamedKey::Backspace),
+            WinitNamedKey::BrightnessDown => Key::Named(NamedKey::BrightnessDown),
+            WinitNamedKey::BrightnessUp => Key::Named(NamedKey::BrightnessUp),
+            WinitNamedKey::BrowserBack => Key::Named(NamedKey::BrowserBack),
+            WinitNamedKey::BrowserFavorites => Key::Named(NamedKey::BrowserFavorites),
+            WinitNamedKey::BrowserForward => Key::Named(NamedKey::BrowserForward),
+            WinitNamedKey::BrowserHome => Key::Named(NamedKey::BrowserHome),
+            WinitNamedKey::BrowserRefresh => Key::Named(NamedKey::BrowserRefresh),
+            WinitNamedKey::BrowserSearch => Key::Named(NamedKey::BrowserSearch),
+            WinitNamedKey::BrowserStop => Key::Named(NamedKey::BrowserStop),
+            WinitNamedKey::Call => Key::Named(NamedKey::Call),
+            WinitNamedKey::Camera => Key::Named(NamedKey::Camera),
+            WinitNamedKey::CameraFocus => Key::Named(NamedKey::CameraFocus),
+            WinitNamedKey::Cancel => Key::Named(NamedKey::Cancel),
+            WinitNamedKey::CapsLock => Key::Named(NamedKey::CapsLock),
+            WinitNamedKey::ChannelDown => Key::Named(NamedKey::ChannelDown),
+            WinitNamedKey::ChannelUp => Key::Named(NamedKey::ChannelUp),
+            WinitNamedKey::Clear => Key::Named(NamedKey::Clear),
+            WinitNamedKey::Close => Key::Named(NamedKey::Close),
+            WinitNamedKey::ClosedCaptionToggle => Key::Named(NamedKey::ClosedCaptionToggle),
+            WinitNamedKey::CodeInput => Key::Named(NamedKey::CodeInput),
+            WinitNamedKey::ColorF0Red => Key::Named(NamedKey::ColorF0Red),
+            WinitNamedKey::ColorF1Green => Key::Named(NamedKey::ColorF1Green),
+            WinitNamedKey::ColorF2Yellow => Key::Named(NamedKey::ColorF2Yellow),
+            WinitNamedKey::ColorF3Blue => Key::Named(NamedKey::ColorF3Blue),
+            WinitNamedKey::ColorF4Grey => Key::Named(NamedKey::ColorF4Grey),
+            WinitNamedKey::ColorF5Brown => Key::Named(NamedKey::ColorF5Brown),
+            WinitNamedKey::Compose => Key::Named(NamedKey::Compose),
+            WinitNamedKey::ContextMenu => Key::Named(NamedKey::ContextMenu),
+            WinitNamedKey::Control => Key::Named(NamedKey::Control),
+            WinitNamedKey::Convert => Key::Named(NamedKey::Convert),
+            WinitNamedKey::Copy => Key::Named(NamedKey::Copy),
+            WinitNamedKey::CrSel => Key::Named(NamedKey::CrSel),
+            WinitNamedKey::Cut => Key::Named(NamedKey::Cut),
+            WinitNamedKey::DVR => Key::Named(NamedKey::DVR),
+            WinitNamedKey::Delete => Key::Named(NamedKey::Delete),
+            WinitNamedKey::Dimmer => Key::Named(NamedKey::Dimmer),
+            WinitNamedKey::DisplaySwap => Key::Named(NamedKey::DisplaySwap),
+            WinitNamedKey::Eisu => Key::Named(NamedKey::Eisu),
+            WinitNamedKey::Eject => Key::Named(NamedKey::Eject),
+            WinitNamedKey::End => Key::Named(NamedKey::End),
+            WinitNamedKey::EndCall => Key::Named(NamedKey::EndCall),
+            WinitNamedKey::Enter => Key::Named(NamedKey::Enter),
+            WinitNamedKey::EraseEof => Key::Named(NamedKey::EraseEof),
+            WinitNamedKey::Escape => Key::Named(NamedKey::Escape),
+            WinitNamedKey::ExSel => Key::Named(NamedKey::ExSel),
+            WinitNamedKey::Execute => Key::Named(NamedKey::Execute),
+            WinitNamedKey::Exit => Key::Named(NamedKey::Exit),
+            WinitNamedKey::F1 => Key::Named(NamedKey::F1),
+            WinitNamedKey::F10 => Key::Named(NamedKey::F10),
+            WinitNamedKey::F11 => Key::Named(NamedKey::F11),
+            WinitNamedKey::F12 => Key::Named(NamedKey::F12),
+            WinitNamedKey::F13 => Key::Named(NamedKey::F13),
+            WinitNamedKey::F14 => Key::Named(NamedKey::F14),
+            WinitNamedKey::F15 => Key::Named(NamedKey::F15),
+            WinitNamedKey::F16 => Key::Named(NamedKey::F16),
+            WinitNamedKey::F17 => Key::Named(NamedKey::F17),
+            WinitNamedKey::F18 => Key::Named(NamedKey::F18),
+            WinitNamedKey::F19 => Key::Named(NamedKey::F19),
+            WinitNamedKey::F2 => Key::Named(NamedKey::F2),
+            WinitNamedKey::F20 => Key::Named(NamedKey::F20),
+            WinitNamedKey::F21 => Key::Named(NamedKey::F21),
+            WinitNamedKey::F22 => Key::Named(NamedKey::F22),
+            WinitNamedKey::F23 => Key::Named(NamedKey::F23),
+            WinitNamedKey::F24 => Key::Named(NamedKey::F24),
+            WinitNamedKey::F25 => Key::Named(NamedKey::F25),
+            WinitNamedKey::F26 => Key::Named(NamedKey::F26),
+            WinitNamedKey::F27 => Key::Named(NamedKey::F27),
+            WinitNamedKey::F28 => Key::Named(NamedKey::F28),
+            WinitNamedKey::F29 => Key::Named(NamedKey::F29),
+            WinitNamedKey::F3 => Key::Named(NamedKey::F3),
+            WinitNamedKey::F30 => Key::Named(NamedKey::F30),
+            WinitNamedKey::F31 => Key::Named(NamedKey::F31),
+            WinitNamedKey::F32 => Key::Named(NamedKey::F32),
+            WinitNamedKey::F33 => Key::Named(NamedKey::F33),
+            WinitNamedKey::F34 => Key::Named(NamedKey::F34),
+            WinitNamedKey::F35 => Key::Named(NamedKey::F35),
+            WinitNamedKey::F4 => Key::Named(NamedKey::F4),
+            WinitNamedKey::F5 => Key::Named(NamedKey::F5),
+            WinitNamedKey::F6 => Key::Named(NamedKey::F6),
+            WinitNamedKey::F7 => Key::Named(NamedKey::F7),
+            WinitNamedKey::F8 => Key::Named(NamedKey::F8),
+            WinitNamedKey::F9 => Key::Named(NamedKey::F9),
+            WinitNamedKey::FavoriteClear0 => Key::Named(NamedKey::FavoriteClear0),
+            WinitNamedKey::FavoriteClear1 => Key::Named(NamedKey::FavoriteClear1),
+            WinitNamedKey::FavoriteClear2 => Key::Named(NamedKey::FavoriteClear2),
+            WinitNamedKey::FavoriteClear3 => Key::Named(NamedKey::FavoriteClear3),
+            WinitNamedKey::FavoriteRecall0 => Key::Named(NamedKey::FavoriteRecall0),
+            WinitNamedKey::FavoriteRecall1 => Key::Named(NamedKey::FavoriteRecall1),
+            WinitNamedKey::FavoriteRecall2 => Key::Named(NamedKey::FavoriteRecall2),
+            WinitNamedKey::FavoriteRecall3 => Key::Named(NamedKey::FavoriteRecall3),
+            WinitNamedKey::FavoriteStore0 => Key::Named(NamedKey::FavoriteStore0),
+            WinitNamedKey::FavoriteStore1 => Key::Named(NamedKey::FavoriteStore1),
+            WinitNamedKey::FavoriteStore2 => Key::Named(NamedKey::FavoriteStore2),
+            WinitNamedKey::FavoriteStore3 => Key::Named(NamedKey::FavoriteStore3),
+            WinitNamedKey::FinalMode => Key::Named(NamedKey::FinalMode),
+            WinitNamedKey::Find => Key::Named(NamedKey::Find),
+            WinitNamedKey::Fn => Key::Named(NamedKey::Fn),
+            WinitNamedKey::FnLock => Key::Named(NamedKey::FnLock),
+            WinitNamedKey::GoBack => Key::Named(NamedKey::GoBack),
+            WinitNamedKey::GoHome => Key::Named(NamedKey::GoHome),
+            WinitNamedKey::GroupFirst => Key::Named(NamedKey::GroupFirst),
+            WinitNamedKey::GroupLast => Key::Named(NamedKey::GroupLast),
+            WinitNamedKey::GroupNext => Key::Named(NamedKey::GroupNext),
+            WinitNamedKey::GroupPrevious => Key::Named(NamedKey::GroupPrevious),
+            WinitNamedKey::Guide => Key::Named(NamedKey::Guide),
+            WinitNamedKey::GuideNextDay => Key::Named(NamedKey::GuideNextDay),
+            WinitNamedKey::GuidePreviousDay => Key::Named(NamedKey::GuidePreviousDay),
+            WinitNamedKey::HangulMode => Key::Named(NamedKey::HangulMode),
+            WinitNamedKey::HanjaMode => Key::Named(NamedKey::HanjaMode),
+            WinitNamedKey::Hankaku => Key::Named(NamedKey::Hankaku),
+            WinitNamedKey::HeadsetHook => Key::Named(NamedKey::HeadsetHook),
+            WinitNamedKey::Help => Key::Named(NamedKey::Help),
+            WinitNamedKey::Hibernate => Key::Named(NamedKey::Hibernate),
+            WinitNamedKey::Hiragana => Key::Named(NamedKey::Hiragana),
+            WinitNamedKey::HiraganaKatakana => Key::Named(NamedKey::HiraganaKatakana),
+            WinitNamedKey::Home => Key::Named(NamedKey::Home),
+            WinitNamedKey::Hyper => Key::Named(NamedKey::Hyper),
+            WinitNamedKey::Info => Key::Named(NamedKey::Info),
+            WinitNamedKey::Insert => Key::Named(NamedKey::Insert),
+            WinitNamedKey::InstantReplay => Key::Named(NamedKey::InstantReplay),
+            WinitNamedKey::JunjaMode => Key::Named(NamedKey::JunjaMode),
+            WinitNamedKey::KanaMode => Key::Named(NamedKey::KanaMode),
+            WinitNamedKey::KanjiMode => Key::Named(NamedKey::KanjiMode),
+            WinitNamedKey::Katakana => Key::Named(NamedKey::Katakana),
+            WinitNamedKey::Key11 => Key::Named(NamedKey::Key11),
+            WinitNamedKey::Key12 => Key::Named(NamedKey::Key12),
+            WinitNamedKey::LastNumberRedial => Key::Named(NamedKey::LastNumberRedial),
+            WinitNamedKey::LaunchApplication1 => Key::Named(NamedKey::LaunchApplication1),
+            WinitNamedKey::LaunchApplication2 => Key::Named(NamedKey::LaunchApplication2),
+            WinitNamedKey::LaunchCalendar => Key::Named(NamedKey::LaunchCalendar),
+            WinitNamedKey::LaunchContacts => Key::Named(NamedKey::LaunchContacts),
+            WinitNamedKey::LaunchMail => Key::Named(NamedKey::LaunchMail),
+            WinitNamedKey::LaunchMediaPlayer => Key::Named(NamedKey::LaunchMediaPlayer),
+            WinitNamedKey::LaunchMusicPlayer => Key::Named(NamedKey::LaunchMusicPlayer),
+            WinitNamedKey::LaunchPhone => Key::Named(NamedKey::LaunchPhone),
+            WinitNamedKey::LaunchScreenSaver => Key::Named(NamedKey::LaunchScreenSaver),
+            WinitNamedKey::LaunchSpreadsheet => Key::Named(NamedKey::LaunchSpreadsheet),
+            WinitNamedKey::LaunchWebBrowser => Key::Named(NamedKey::LaunchWebBrowser),
+            WinitNamedKey::LaunchWebCam => Key::Named(NamedKey::LaunchWebCam),
+            WinitNamedKey::LaunchWordProcessor => Key::Named(NamedKey::LaunchWordProcessor),
+            WinitNamedKey::Link => Key::Named(NamedKey::Link),
+            WinitNamedKey::ListProgram => Key::Named(NamedKey::ListProgram),
+            WinitNamedKey::LiveContent => Key::Named(NamedKey::LiveContent),
+            WinitNamedKey::Lock => Key::Named(NamedKey::Lock),
+            WinitNamedKey::LogOff => Key::Named(NamedKey::LogOff),
+            WinitNamedKey::MailForward => Key::Named(NamedKey::MailForward),
+            WinitNamedKey::MailReply => Key::Named(NamedKey::MailReply),
+            WinitNamedKey::MailSend => Key::Named(NamedKey::MailSend),
+            WinitNamedKey::MannerMode => Key::Named(NamedKey::MannerMode),
+            WinitNamedKey::MediaApps => Key::Named(NamedKey::MediaApps),
+            WinitNamedKey::MediaAudioTrack => Key::Named(NamedKey::MediaAudioTrack),
+            WinitNamedKey::MediaClose => Key::Named(NamedKey::MediaClose),
+            WinitNamedKey::MediaFastForward => Key::Named(NamedKey::MediaFastForward),
+            WinitNamedKey::MediaLast => Key::Named(NamedKey::MediaLast),
+            WinitNamedKey::MediaPause => Key::Named(NamedKey::MediaPause),
+            WinitNamedKey::MediaPlay => Key::Named(NamedKey::MediaPlay),
+            WinitNamedKey::MediaPlayPause => Key::Named(NamedKey::MediaPlayPause),
+            WinitNamedKey::MediaRecord => Key::Named(NamedKey::MediaRecord),
+            WinitNamedKey::MediaRewind => Key::Named(NamedKey::MediaRewind),
+            WinitNamedKey::MediaSkipBackward => Key::Named(NamedKey::MediaSkipBackward),
+            WinitNamedKey::MediaSkipForward => Key::Named(NamedKey::MediaSkipForward),
+            WinitNamedKey::MediaStepBackward => Key::Named(NamedKey::MediaStepBackward),
+            WinitNamedKey::MediaStepForward => Key::Named(NamedKey::MediaStepForward),
+            WinitNamedKey::MediaStop => Key::Named(NamedKey::MediaStop),
+            WinitNamedKey::MediaTopMenu => Key::Named(NamedKey::MediaTopMenu),
+            WinitNamedKey::MediaTrackNext => Key::Named(NamedKey::MediaTrackNext),
+            WinitNamedKey::MediaTrackPrevious => Key::Named(NamedKey::MediaTrackPrevious),
+            WinitNamedKey::Meta => Key::Named(NamedKey::Meta),
+            WinitNamedKey::MicrophoneToggle => Key::Named(NamedKey::MicrophoneToggle),
+            WinitNamedKey::MicrophoneVolumeDown => Key::Named(NamedKey::MicrophoneVolumeDown),
+            WinitNamedKey::MicrophoneVolumeMute => Key::Named(NamedKey::MicrophoneVolumeMute),
+            WinitNamedKey::MicrophoneVolumeUp => Key::Named(NamedKey::MicrophoneVolumeUp),
+            WinitNamedKey::ModeChange => Key::Named(NamedKey::ModeChange),
+            WinitNamedKey::NavigateIn => Key::Named(NamedKey::NavigateIn),
+            WinitNamedKey::NavigateNext => Key::Named(NamedKey::NavigateNext),
+            WinitNamedKey::NavigateOut => Key::Named(NamedKey::NavigateOut),
+            WinitNamedKey::NavigatePrevious => Key::Named(NamedKey::NavigatePrevious),
+            WinitNamedKey::New => Key::Named(NamedKey::New),
+            WinitNamedKey::NextCandidate => Key::Named(NamedKey::NextCandidate),
+            WinitNamedKey::NextFavoriteChannel => Key::Named(NamedKey::NextFavoriteChannel),
+            WinitNamedKey::NextUserProfile => Key::Named(NamedKey::NextUserProfile),
+            WinitNamedKey::NonConvert => Key::Named(NamedKey::NonConvert),
+            WinitNamedKey::Notification => Key::Named(NamedKey::Notification),
+            WinitNamedKey::NumLock => Key::Named(NamedKey::NumLock),
+            WinitNamedKey::OnDemand => Key::Named(NamedKey::OnDemand),
+            WinitNamedKey::Open => Key::Named(NamedKey::Open),
+            WinitNamedKey::PageDown => Key::Named(NamedKey::PageDown),
+            WinitNamedKey::PageUp => Key::Named(NamedKey::PageUp),
+            WinitNamedKey::Pairing => Key::Named(NamedKey::Pairing),
+            WinitNamedKey::Paste => Key::Named(NamedKey::Paste),
+            WinitNamedKey::Pause => Key::Named(NamedKey::Pause),
+            WinitNamedKey::PinPDown => Key::Named(NamedKey::PinPDown),
+            WinitNamedKey::PinPMove => Key::Named(NamedKey::PinPMove),
+            WinitNamedKey::PinPToggle => Key::Named(NamedKey::PinPToggle),
+            WinitNamedKey::PinPUp => Key::Named(NamedKey::PinPUp),
+            WinitNamedKey::Play => Key::Named(NamedKey::Play),
+            WinitNamedKey::PlaySpeedDown => Key::Named(NamedKey::PlaySpeedDown),
+            WinitNamedKey::PlaySpeedReset => Key::Named(NamedKey::PlaySpeedReset),
+            WinitNamedKey::PlaySpeedUp => Key::Named(NamedKey::PlaySpeedUp),
+            WinitNamedKey::Power => Key::Named(NamedKey::Power),
+            WinitNamedKey::PowerOff => Key::Named(NamedKey::PowerOff),
+            WinitNamedKey::PreviousCandidate => Key::Named(NamedKey::PreviousCandidate),
+            WinitNamedKey::Print => Key::Named(NamedKey::Print),
+            WinitNamedKey::PrintScreen => Key::Named(NamedKey::PrintScreen),
+            WinitNamedKey::Process => Key::Named(NamedKey::Process),
+            WinitNamedKey::Props => Key::Named(NamedKey::Props),
+            WinitNamedKey::RandomToggle => Key::Named(NamedKey::RandomToggle),
+            WinitNamedKey::RcLowBattery => Key::Named(NamedKey::RcLowBattery),
+            WinitNamedKey::RecordSpeedNext => Key::Named(NamedKey::RecordSpeedNext),
+            WinitNamedKey::Redo => Key::Named(NamedKey::Redo),
+            WinitNamedKey::RfBypass => Key::Named(NamedKey::RfBypass),
+            WinitNamedKey::Romaji => Key::Named(NamedKey::Romaji),
+            WinitNamedKey::STBInput => Key::Named(NamedKey::STBInput),
+            WinitNamedKey::STBPower => Key::Named(NamedKey::STBPower),
+            WinitNamedKey::Save => Key::Named(NamedKey::Save),
+            WinitNamedKey::ScanChannelsToggle => Key::Named(NamedKey::ScanChannelsToggle),
+            WinitNamedKey::ScreenModeNext => Key::Named(NamedKey::ScreenModeNext),
+            WinitNamedKey::ScrollLock => Key::Named(NamedKey::ScrollLock),
+            WinitNamedKey::Select => Key::Named(NamedKey::Select),
+            WinitNamedKey::Settings => Key::Named(NamedKey::Settings),
+            WinitNamedKey::Shift => Key::Named(NamedKey::Shift),
+            WinitNamedKey::SingleCandidate => Key::Named(NamedKey::SingleCandidate),
+            WinitNamedKey::Soft1 => Key::Named(NamedKey::Soft1),
+            WinitNamedKey::Soft2 => Key::Named(NamedKey::Soft2),
+            WinitNamedKey::Soft3 => Key::Named(NamedKey::Soft3),
+            WinitNamedKey::Soft4 => Key::Named(NamedKey::Soft4),
+            WinitNamedKey::Space => Key::Character(" ".to_string()),
+            WinitNamedKey::SpeechCorrectionList => Key::Named(NamedKey::SpeechCorrectionList),
+            WinitNamedKey::SpeechInputToggle => Key::Named(NamedKey::SpeechInputToggle),
+            WinitNamedKey::SpellCheck => Key::Named(NamedKey::SpellCheck),
+            WinitNamedKey::SplitScreenToggle => Key::Named(NamedKey::SplitScreenToggle),
+            WinitNamedKey::Standby => Key::Named(NamedKey::Standby),
+            WinitNamedKey::Subtitle => Key::Named(NamedKey::Subtitle),
+            WinitNamedKey::Super => Key::Named(NamedKey::Super),
+            WinitNamedKey::Symbol => Key::Named(NamedKey::Symbol),
+            WinitNamedKey::SymbolLock => Key::Named(NamedKey::SymbolLock),
+            WinitNamedKey::TV => Key::Named(NamedKey::TV),
+            WinitNamedKey::TV3DMode => Key::Named(NamedKey::TV3DMode),
+            WinitNamedKey::TVAntennaCable => Key::Named(NamedKey::TVAntennaCable),
+            WinitNamedKey::TVAudioDescription => Key::Named(NamedKey::TVAudioDescription),
+            WinitNamedKey::TVAudioDescriptionMixDown => {
+                Key::Named(NamedKey::TVAudioDescriptionMixDown)
+            }
+            WinitNamedKey::TVAudioDescriptionMixUp => Key::Named(NamedKey::TVAudioDescriptionMixUp),
+            WinitNamedKey::TVContentsMenu => Key::Named(NamedKey::TVContentsMenu),
+            WinitNamedKey::TVDataService => Key::Named(NamedKey::TVDataService),
+            WinitNamedKey::TVInput => Key::Named(NamedKey::TVInput),
+            WinitNamedKey::TVInputComponent1 => Key::Named(NamedKey::TVInputComponent1),
+            WinitNamedKey::TVInputComponent2 => Key::Named(NamedKey::TVInputComponent2),
+            WinitNamedKey::TVInputComposite1 => Key::Named(NamedKey::TVInputComposite1),
+            WinitNamedKey::TVInputComposite2 => Key::Named(NamedKey::TVInputComposite2),
+            WinitNamedKey::TVInputHDMI1 => Key::Named(NamedKey::TVInputHDMI1),
+            WinitNamedKey::TVInputHDMI2 => Key::Named(NamedKey::TVInputHDMI2),
+            WinitNamedKey::TVInputHDMI3 => Key::Named(NamedKey::TVInputHDMI3),
+            WinitNamedKey::TVInputHDMI4 => Key::Named(NamedKey::TVInputHDMI4),
+            WinitNamedKey::TVInputVGA1 => Key::Named(NamedKey::TVInputVGA1),
+            WinitNamedKey::TVMediaContext => Key::Named(NamedKey::TVMediaContext),
+            WinitNamedKey::TVNetwork => Key::Named(NamedKey::TVNetwork),
+            WinitNamedKey::TVNumberEntry => Key::Named(NamedKey::TVNumberEntry),
+            WinitNamedKey::TVPower => Key::Named(NamedKey::TVPower),
+            WinitNamedKey::TVRadioService => Key::Named(NamedKey::TVRadioService),
+            WinitNamedKey::TVSatellite => Key::Named(NamedKey::TVSatellite),
+            WinitNamedKey::TVSatelliteBS => Key::Named(NamedKey::TVSatelliteBS),
+            WinitNamedKey::TVSatelliteCS => Key::Named(NamedKey::TVSatelliteCS),
+            WinitNamedKey::TVSatelliteToggle => Key::Named(NamedKey::TVSatelliteToggle),
+            WinitNamedKey::TVTerrestrialAnalog => Key::Named(NamedKey::TVTerrestrialAnalog),
+            WinitNamedKey::TVTerrestrialDigital => Key::Named(NamedKey::TVTerrestrialDigital),
+            WinitNamedKey::TVTimer => Key::Named(NamedKey::TVTimer),
+            WinitNamedKey::Tab => Key::Named(NamedKey::Tab),
+            WinitNamedKey::Teletext => Key::Named(NamedKey::Teletext),
+            WinitNamedKey::Undo => Key::Named(NamedKey::Undo),
+            WinitNamedKey::VideoModeNext => Key::Named(NamedKey::VideoModeNext),
+            WinitNamedKey::VoiceDial => Key::Named(NamedKey::VoiceDial),
+            WinitNamedKey::WakeUp => Key::Named(NamedKey::WakeUp),
+            WinitNamedKey::Wink => Key::Named(NamedKey::Wink),
+            WinitNamedKey::Zenkaku => Key::Named(NamedKey::Zenkaku),
+            WinitNamedKey::ZenkakuHankaku => Key::Named(NamedKey::ZenkakuHankaku),
+            WinitNamedKey::ZoomIn => Key::Named(NamedKey::ZoomIn),
+            WinitNamedKey::ZoomOut => Key::Named(NamedKey::ZoomOut),
+            WinitNamedKey::ZoomToggle => Key::Named(NamedKey::ZoomToggle),
+            _ => Key::Named(NamedKey::Unidentified),
+        }
     }
 }
 
-/// Maps [`KeyCode`] to [`Location`].
-macro_rules! map_key_location {
-    ($key_code: ident $(, $location: ident : $k1: ident $(| $kn: ident)*)+) => {
-        match $key_code {
-            $(KeyCode::$k1 $(| KeyCode::$kn)* => Location::$location,)+
-            _ => Location::Standard,
+impl FromWinitKeyEvent for Location {
+    fn from_winit_key_event(key_event: &KeyEvent) -> Self {
+        match key_event.location {
+            WinitKeyLocation::Left => Location::Left,
+            WinitKeyLocation::Numpad => Location::Numpad,
+            WinitKeyLocation::Right => Location::Right,
+            WinitKeyLocation::Standard => Location::Standard,
         }
-    };
+    }
 }
 
-fn get_servo_location_from_physical_key(physical_key: PhysicalKey) -> Location {
-    let key_code = if let PhysicalKey::Code(key_code) = physical_key {
-        key_code
-    } else {
-        return Location::Standard;
-    };
+#[allow(deprecated)]
+impl FromWinitKeyEvent for Code {
+    fn from_winit_key_event(key_event: &KeyEvent) -> Self {
+        let key_code = match key_event.physical_key {
+            PhysicalKey::Code(key_code) => key_code,
+            PhysicalKey::Unidentified(_os_code) => return Code::Unidentified,
+        };
 
-    // TODO: Map more locations
-    map_key_location!(
-        key_code,
-        Left: ShiftLeft | ControlLeft | AltLeft | SuperLeft,
-        Right: ShiftRight | ControlRight | AltRight | SuperRight,
-        Numpad: Numpad0 | Numpad1 | Numpad2 | Numpad3 | Numpad4 | Numpad5 | Numpad6 | Numpad7 | Numpad8 | Numpad9
-            | NumpadComma | NumpadEnter | NumpadEqual | NumpadAdd | NumpadSubtract | NumpadMultiply | NumpadDivide
-            | NumpadDecimal | NumpadBackspace | NumpadStar
-    )
-}
-
-/// Maps [`PhysicalKey`] to [`Code`].
-///
-/// Example:
-/// 1. `One-one mappings`:
-/// ```
-///     physical_key_to_code!(a, Escape, F1, F2,...)
-/// ```
-/// matches [`KeyCode::Escape`] => [`Code::Escape`], [`KeyCode::F1`] => [`Code::F1`], [`KeyCode::F2`] => [`Code::F2`],...
-///
-/// 2. `Custom mappings`:
-/// ```
-///    physical_key_to_code!(a, Escape, F1 => F2, F3)
-/// ```
-/// matches [`KeyCode::Escape`] => [`Code::Escape`], [`KeyCode::F1`] => [`Code::F2`], [`KeyCode::F3`] => [`Code::F3`],...
-macro_rules! physical_key_to_code {
-    // Matches an optional token
-    (@opt $_: ident, $optional: ident) => {
-        Code::$optional
-    };
-
-    (@opt $variant: ident) => {
-        Code::$variant
-    };
-
-    ($key_code: ident $(, $pk: ident $(=> $matchto: ident)?)+) => {
-        match $key_code {
-            $(KeyCode::$pk => physical_key_to_code!(@opt $pk $(, $matchto)?),)+
+        match key_code {
+            KeyCode::Abort => Code::Abort,
+            KeyCode::Again => Code::Again,
+            KeyCode::AltLeft => Code::AltLeft,
+            KeyCode::AltRight => Code::AltRight,
+            KeyCode::ArrowDown => Code::ArrowDown,
+            KeyCode::ArrowLeft => Code::ArrowLeft,
+            KeyCode::ArrowRight => Code::ArrowRight,
+            KeyCode::ArrowUp => Code::ArrowUp,
+            KeyCode::AudioVolumeDown => Code::AudioVolumeDown,
+            KeyCode::AudioVolumeMute => Code::AudioVolumeMute,
+            KeyCode::AudioVolumeUp => Code::AudioVolumeUp,
+            KeyCode::Backquote => Code::Backquote,
+            KeyCode::Backslash => Code::Backslash,
+            KeyCode::Backspace => Code::Backspace,
+            KeyCode::BracketLeft => Code::BracketLeft,
+            KeyCode::BracketRight => Code::BracketRight,
+            KeyCode::BrowserBack => Code::BrowserBack,
+            KeyCode::BrowserFavorites => Code::BrowserFavorites,
+            KeyCode::BrowserForward => Code::BrowserForward,
+            KeyCode::BrowserHome => Code::BrowserHome,
+            KeyCode::BrowserRefresh => Code::BrowserRefresh,
+            KeyCode::BrowserSearch => Code::BrowserSearch,
+            KeyCode::BrowserStop => Code::BrowserStop,
+            KeyCode::CapsLock => Code::CapsLock,
+            KeyCode::Comma => Code::Comma,
+            KeyCode::ContextMenu => Code::ContextMenu,
+            KeyCode::ControlLeft => Code::ControlLeft,
+            KeyCode::ControlRight => Code::ControlRight,
+            KeyCode::Convert => Code::Convert,
+            KeyCode::Copy => Code::Copy,
+            KeyCode::Cut => Code::Cut,
+            KeyCode::Delete => Code::Delete,
+            KeyCode::Digit0 => Code::Digit0,
+            KeyCode::Digit1 => Code::Digit1,
+            KeyCode::Digit2 => Code::Digit2,
+            KeyCode::Digit3 => Code::Digit3,
+            KeyCode::Digit4 => Code::Digit4,
+            KeyCode::Digit5 => Code::Digit5,
+            KeyCode::Digit6 => Code::Digit6,
+            KeyCode::Digit7 => Code::Digit7,
+            KeyCode::Digit8 => Code::Digit8,
+            KeyCode::Digit9 => Code::Digit9,
+            KeyCode::Eject => Code::Eject,
+            KeyCode::End => Code::End,
+            KeyCode::Enter => Code::Enter,
+            KeyCode::Equal => Code::Equal,
+            KeyCode::Escape => Code::Escape,
+            KeyCode::F1 => Code::F1,
+            KeyCode::F10 => Code::F10,
+            KeyCode::F11 => Code::F11,
+            KeyCode::F12 => Code::F12,
+            KeyCode::F13 => Code::F13,
+            KeyCode::F14 => Code::F14,
+            KeyCode::F15 => Code::F15,
+            KeyCode::F16 => Code::F16,
+            KeyCode::F17 => Code::F17,
+            KeyCode::F18 => Code::F18,
+            KeyCode::F19 => Code::F19,
+            KeyCode::F2 => Code::F2,
+            KeyCode::F20 => Code::F20,
+            KeyCode::F21 => Code::F21,
+            KeyCode::F22 => Code::F22,
+            KeyCode::F23 => Code::F23,
+            KeyCode::F24 => Code::F24,
+            KeyCode::F25 => Code::F25,
+            KeyCode::F26 => Code::F26,
+            KeyCode::F27 => Code::F27,
+            KeyCode::F28 => Code::F28,
+            KeyCode::F29 => Code::F29,
+            KeyCode::F3 => Code::F3,
+            KeyCode::F30 => Code::F30,
+            KeyCode::F31 => Code::F31,
+            KeyCode::F32 => Code::F32,
+            KeyCode::F33 => Code::F33,
+            KeyCode::F34 => Code::F34,
+            KeyCode::F35 => Code::F35,
+            KeyCode::F4 => Code::F4,
+            KeyCode::F5 => Code::F5,
+            KeyCode::F6 => Code::F6,
+            KeyCode::F7 => Code::F7,
+            KeyCode::F8 => Code::F8,
+            KeyCode::F9 => Code::F9,
+            KeyCode::Find => Code::Find,
+            KeyCode::Fn => Code::Fn,
+            KeyCode::FnLock => Code::FnLock,
+            KeyCode::Help => Code::Help,
+            KeyCode::Hiragana => Code::Hiragana,
+            KeyCode::Home => Code::Home,
+            KeyCode::Hyper => Code::Hyper,
+            KeyCode::Insert => Code::Insert,
+            KeyCode::IntlBackslash => Code::IntlBackslash,
+            KeyCode::IntlRo => Code::IntlRo,
+            KeyCode::IntlYen => Code::IntlYen,
+            KeyCode::KanaMode => Code::KanaMode,
+            KeyCode::Katakana => Code::Katakana,
+            KeyCode::KeyA => Code::KeyA,
+            KeyCode::KeyB => Code::KeyB,
+            KeyCode::KeyC => Code::KeyC,
+            KeyCode::KeyD => Code::KeyD,
+            KeyCode::KeyE => Code::KeyE,
+            KeyCode::KeyF => Code::KeyF,
+            KeyCode::KeyG => Code::KeyG,
+            KeyCode::KeyH => Code::KeyH,
+            KeyCode::KeyI => Code::KeyI,
+            KeyCode::KeyJ => Code::KeyJ,
+            KeyCode::KeyK => Code::KeyK,
+            KeyCode::KeyL => Code::KeyL,
+            KeyCode::KeyM => Code::KeyM,
+            KeyCode::KeyN => Code::KeyN,
+            KeyCode::KeyO => Code::KeyO,
+            KeyCode::KeyP => Code::KeyP,
+            KeyCode::KeyQ => Code::KeyQ,
+            KeyCode::KeyR => Code::KeyR,
+            KeyCode::KeyS => Code::KeyS,
+            KeyCode::KeyT => Code::KeyT,
+            KeyCode::KeyU => Code::KeyU,
+            KeyCode::KeyV => Code::KeyV,
+            KeyCode::KeyW => Code::KeyW,
+            KeyCode::KeyX => Code::KeyX,
+            KeyCode::KeyY => Code::KeyY,
+            KeyCode::KeyZ => Code::KeyZ,
+            KeyCode::Lang1 => Code::Lang1,
+            KeyCode::Lang2 => Code::Lang2,
+            KeyCode::Lang3 => Code::Lang3,
+            KeyCode::Lang4 => Code::Lang4,
+            KeyCode::Lang5 => Code::Lang5,
+            KeyCode::LaunchApp1 => Code::LaunchApp1,
+            KeyCode::LaunchApp2 => Code::LaunchApp2,
+            KeyCode::LaunchMail => Code::LaunchMail,
+            KeyCode::MediaPlayPause => Code::MediaPlayPause,
+            KeyCode::MediaSelect => Code::MediaSelect,
+            KeyCode::MediaStop => Code::MediaStop,
+            KeyCode::MediaTrackNext => Code::MediaTrackNext,
+            KeyCode::MediaTrackPrevious => Code::MediaTrackPrevious,
+            KeyCode::Meta => Code::Super,
+            KeyCode::Minus => Code::Minus,
+            KeyCode::NonConvert => Code::NonConvert,
+            KeyCode::NumLock => Code::NumLock,
+            KeyCode::Numpad0 => Code::Numpad0,
+            KeyCode::Numpad1 => Code::Numpad1,
+            KeyCode::Numpad2 => Code::Numpad2,
+            KeyCode::Numpad3 => Code::Numpad3,
+            KeyCode::Numpad4 => Code::Numpad4,
+            KeyCode::Numpad5 => Code::Numpad5,
+            KeyCode::Numpad6 => Code::Numpad6,
+            KeyCode::Numpad7 => Code::Numpad7,
+            KeyCode::Numpad8 => Code::Numpad8,
+            KeyCode::Numpad9 => Code::Numpad9,
+            KeyCode::NumpadAdd => Code::NumpadAdd,
+            KeyCode::NumpadBackspace => Code::NumpadBackspace,
+            KeyCode::NumpadClear => Code::NumpadClear,
+            KeyCode::NumpadClearEntry => Code::NumpadClearEntry,
+            KeyCode::NumpadComma => Code::NumpadComma,
+            KeyCode::NumpadDecimal => Code::NumpadDecimal,
+            KeyCode::NumpadDivide => Code::NumpadDivide,
+            KeyCode::NumpadEnter => Code::NumpadEnter,
+            KeyCode::NumpadEqual => Code::NumpadEqual,
+            KeyCode::NumpadHash => Code::NumpadHash,
+            KeyCode::NumpadMemoryAdd => Code::NumpadMemoryAdd,
+            KeyCode::NumpadMemoryClear => Code::NumpadMemoryClear,
+            KeyCode::NumpadMemoryRecall => Code::NumpadMemoryRecall,
+            KeyCode::NumpadMemoryStore => Code::NumpadMemoryStore,
+            KeyCode::NumpadMemorySubtract => Code::NumpadMemorySubtract,
+            KeyCode::NumpadMultiply => Code::NumpadMultiply,
+            KeyCode::NumpadParenLeft => Code::NumpadParenLeft,
+            KeyCode::NumpadParenRight => Code::NumpadParenRight,
+            KeyCode::NumpadStar => Code::NumpadStar,
+            KeyCode::NumpadSubtract => Code::NumpadSubtract,
+            KeyCode::Open => Code::Open,
+            KeyCode::PageDown => Code::PageDown,
+            KeyCode::PageUp => Code::PageUp,
+            KeyCode::Paste => Code::Paste,
+            KeyCode::Pause => Code::Pause,
+            KeyCode::Period => Code::Period,
+            KeyCode::Power => Code::Power,
+            KeyCode::PrintScreen => Code::PrintScreen,
+            KeyCode::Props => Code::Props,
+            KeyCode::Quote => Code::Quote,
+            KeyCode::Resume => Code::Resume,
+            KeyCode::ScrollLock => Code::ScrollLock,
+            KeyCode::Select => Code::Select,
+            KeyCode::Semicolon => Code::Semicolon,
+            KeyCode::ShiftLeft => Code::ShiftLeft,
+            KeyCode::ShiftRight => Code::ShiftRight,
+            KeyCode::Slash => Code::Slash,
+            KeyCode::Sleep => Code::Sleep,
+            KeyCode::Space => Code::Space,
+            KeyCode::SuperLeft => Code::MetaLeft,
+            KeyCode::SuperRight => Code::MetaRight,
+            KeyCode::Suspend => Code::Suspend,
+            KeyCode::Tab => Code::Tab,
+            KeyCode::Turbo => Code::Turbo,
+            KeyCode::Undo => Code::Undo,
+            KeyCode::WakeUp => Code::WakeUp,
             _ => Code::Unidentified,
         }
-    };
-}
-
-fn get_servo_code_from_physical_key(physical_key: PhysicalKey) -> Code {
-    let key_code = if let PhysicalKey::Code(key_code) = physical_key {
-        key_code
-    } else {
-        return Code::Unidentified;
-    };
-
-    // TODO: Map more codes
-    physical_key_to_code! {key_code,
-        Escape, F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F12,
-        Backquote, Digit1, Digit2, Digit3, Digit4, Digit5, Digit6, Digit7, Digit8, Digit9, Digit0, Minus, Equal, Backspace,
-        Tab, KeyQ, KeyW, KeyE, KeyR, KeyT, KeyY, KeyU, KeyI, KeyO, KeyP, BracketLeft, BracketRight, Backslash,
-        CapsLock, KeyA, KeyS, KeyD, KeyF, KeyG, KeyH, KeyJ, KeyK, KeyL, Semicolon, Quote, Enter,
-        ShiftLeft, KeyZ, KeyX, KeyC, KeyV, KeyB, KeyN, KeyM, Comma, Period, Slash, ShiftRight,
-        ControlLeft, AltLeft, Space, AltRight, ControlRight,
-        PrintScreen, ScrollLock, Pause,
-        Insert, Home, PageUp,
-        Delete, End, PageDown,
-        ArrowUp, ArrowLeft, ArrowDown, ArrowRight,
-        NumLock, NumpadDivide, NumpadMultiply, NumpadStar, NumpadSubtract,
-        Numpad7, Numpad8, Numpad9, NumpadAdd,
-        Numpad4, Numpad5, Numpad6,
-        Numpad1, Numpad2, Numpad3, NumpadEnter,
-        Numpad0, NumpadDecimal,
-        NumpadParenLeft, NumpadParenRight, NumpadComma, NumpadHash, NumpadBackspace
     }
 }
 
-fn get_modifiers(mods: ModifiersState) -> Modifiers {
+impl FromWinitKeyEvent for KeyState {
+    fn from_winit_key_event(key_event: &KeyEvent) -> Self {
+        match key_event.state {
+            ElementState::Pressed => KeyState::Down,
+            ElementState::Released => KeyState::Up,
+        }
+    }
+}
+
+fn keyboard_modifiers_from_winit_modifiers(mods: ModifiersState) -> Modifiers {
     let mut modifiers = Modifiers::empty();
     modifiers.set(Modifiers::CONTROL, mods.control_key());
     modifiers.set(Modifiers::SHIFT, mods.shift_key());
@@ -205,19 +590,14 @@ fn get_modifiers(mods: ModifiersState) -> Modifiers {
     modifiers
 }
 
-/// Convert Winit's KeyEvent to Servo's KeyboardEvent
-pub fn keyboard_event_from_winit(input: &KeyEvent, state: ModifiersState) -> KeyboardEvent {
-    info!("winit keyboard input: {:?}", input);
-    KeyboardEvent {
-        state: match input.state {
-            ElementState::Pressed => KeyState::Down,
-            ElementState::Released => KeyState::Up,
-        },
-        key: get_servo_key_from_winit_key(&input.logical_key),
-        code: get_servo_code_from_physical_key(input.physical_key),
-        location: get_servo_location_from_physical_key(input.physical_key),
-        modifiers: get_modifiers(state),
-        repeat: false,
-        is_composing: false,
-    }
+pub fn keyboard_event_from_winit(key_event: &KeyEvent, state: ModifiersState) -> KeyboardEvent {
+    KeyboardEvent::new_without_event(
+        KeyState::from_winit_key_event(key_event),
+        Key::from_winit_key_event(key_event),
+        Code::from_winit_key_event(key_event),
+        Location::from_winit_key_event(key_event),
+        keyboard_modifiers_from_winit_modifiers(state),
+        false,
+        false,
+    )
 }

@@ -580,11 +580,37 @@ impl Window {
                 };
 
                 compositor.on_scroll_event(
-                    ScrollLocation::Delta(LayoutVector2D::new(x as f32, y as f32)),
+                    ScrollLocation::Delta(-LayoutVector2D::new(x as f32, y as f32)),
                     DeviceIntPoint::new(point.x as i32, point.y as i32),
                     phase,
                 );
             }
+            // Crashes at the moment, need to fully migrate the touch if we want this
+            // WindowEvent::Touch(touch) => {
+            //     let webview_id = match self.focused_webview_id {
+            //         Some(webview_id) => webview_id,
+            //         None => {
+            //             log::trace!("No focused webview, skipping touch event.");
+            //             return;
+            //         }
+            //     };
+            //     let action = match touch.phase {
+            //         TouchPhase::Started => TouchEventType::Down,
+            //         TouchPhase::Moved => TouchEventType::Move,
+            //         TouchPhase::Ended => TouchEventType::Up,
+            //         TouchPhase::Cancelled => TouchEventType::Cancel,
+            //     };
+            //     forward_input_event(
+            //         compositor,
+            //         webview_id,
+            //         sender,
+            //         InputEvent::Touch(TouchEvent::new(
+            //             action,
+            //             TouchId(touch.id as _),
+            //             DevicePoint::new(touch.location.x as f32, touch.location.y as f32),
+            //         )),
+            //     );
+            // }
             WindowEvent::ModifiersChanged(modifier) => self.modifiers_state.set(modifier.state()),
             WindowEvent::Ime(event) => {
                 let webview_id = match self.focused_webview_id {
@@ -669,15 +695,10 @@ impl Window {
                 log::trace!("Verso is handling {:?}", event);
 
                 /* Window operation keyboard shortcut */
-                if self.handle_keyboard_shortcut(compositor, &event, javascript_evaluator) {
+                if self.handle_keyboard_shortcut(compositor, &event.event, javascript_evaluator) {
                     return;
                 }
-                forward_input_event(
-                    compositor,
-                    webview_id,
-                    sender,
-                    InputEvent::Keyboard(embedder_traits::KeyboardEvent::new(event)),
-                );
+                forward_input_event(compositor, webview_id, sender, InputEvent::Keyboard(event));
             }
             WindowEvent::ThemeChanged(theme) => {
                 let theme = to_servo_theme(Some(theme));
