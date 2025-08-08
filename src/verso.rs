@@ -223,7 +223,7 @@ impl Verso {
             BluetoothThreadFactory::new(embedder_proxy.clone());
 
         // Create resource thread pool
-        let (public_resource_threads, private_resource_threads) =
+        let (public_resource_threads, private_resource_threads, async_runtime) =
             resource_thread::new_resource_threads(
                 devtools_sender.clone(),
                 time_profiler_sender.clone(),
@@ -267,6 +267,7 @@ impl Verso {
             webgl_threads: None,
             webrender_external_images: external_images,
             user_content_manager,
+            async_runtime,
         };
 
         // Create constellation thread

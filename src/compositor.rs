@@ -1,7 +1,6 @@
 use std::cell::Cell;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet, VecDeque};
-use std::ffi::c_void;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -9,13 +8,11 @@ use std::time::{Duration, Instant};
 use crate::rendering::RenderingContext;
 use crate::touch::{TouchAction, TouchHandler};
 use crate::window::Window;
+use base::Epoch;
 use base::cross_process_instant::CrossProcessInstant;
 use base::id::{PipelineId, WebViewId};
-use base::{Epoch, WebRenderEpochToU16};
 use bitflags::bitflags;
-use compositing_traits::display_list::{
-    CompositorDisplayListInfo, HitTestInfo, ScrollTree, ScrollType,
-};
+use compositing_traits::display_list::{CompositorDisplayListInfo, ScrollTree, ScrollType};
 use compositing_traits::{
     CompositionPipeline, CompositorMsg, CompositorProxy, ImageUpdate, PipelineExitSource,
     SendableFrameTree,
@@ -24,9 +21,8 @@ use constellation_traits::{EmbedderToConstellationMessage, PaintMetricEvent, Win
 use crossbeam_channel::{Receiver, Sender};
 use dpi::PhysicalSize;
 use embedder_traits::{
-    AnimationState, CompositorHitTestResult, Cursor, InputEvent, MouseButton, MouseButtonAction,
-    MouseButtonEvent, MouseMoveEvent, TouchEvent, TouchEventType, TouchId, UntrustedNodeAddress,
-    ViewportDetails,
+    AnimationState, CompositorHitTestResult, InputEvent, MouseButton, MouseButtonAction,
+    MouseButtonEvent, MouseMoveEvent, TouchEvent, TouchEventType, TouchId, ViewportDetails,
 };
 use euclid::{Point2D, Scale, Size2D, Transform3D, Vector2D, vec2};
 use gleam::gl;
@@ -163,11 +159,9 @@ pub struct IOCompositor {
     /// The GL bindings for webrender
     webrender_gl: Rc<dyn gl::Gl>,
 
-    /// Current mouse cursor.
-    cursor: Cursor,
-
-    /// Current cursor position.
-    cursor_pos: DevicePoint,
+    /// The last position in the rendered view that the mouse moved over. This becomes `None`
+    /// when the mouse leaves the rendered view.
+    last_mouse_move_position: Option<DevicePoint>,
 
     /// True to exit after page load ('-x').
     wait_for_stable_image: bool,
@@ -187,11 +181,6 @@ pub struct IOCompositor {
     /// will want to avoid blocking on UI events, and just
     /// run the event loop at the vsync interval.
     pub is_animating: bool,
-
-    /// Pending input events queue. Priavte and only this thread pushes events to it.
-    pending_point_input_events: VecDeque<InputEvent>,
-    /// WebRender is not ready between `SendDisplayList` and `WebRenderFrameReady` messages.
-    webrender_frame_ready: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -272,10 +261,6 @@ struct PipelineDetails {
     /// The id of the parent pipeline, if any.
     parent_pipeline_id: Option<PipelineId>,
 
-    /// The epoch of the most recent display list for this pipeline. Note that this display
-    /// list might not be displayed, as WebRender processes display lists asynchronously.
-    most_recent_display_list_epoch: Option<WebRenderEpoch>,
-
     /// Whether animations are running
     animations_running: bool,
 
@@ -284,10 +269,6 @@ struct PipelineDetails {
 
     /// Whether to use less resources by stopping animations.
     throttled: bool,
-
-    /// Hit test items for this pipeline. This is used to map WebRender hit test
-    /// information to the full information necessary for Servo.
-    hit_test_items: Vec<HitTestInfo>,
 
     /// The compositor-side [ScrollTree]. This is used to allow finding and scrolling
     /// nodes in the compositor before forwarding new offsets to WebRender.
@@ -304,21 +285,14 @@ struct PipelineDetails {
     pub exited: PipelineExitSource,
 }
 
-enum HitTestError {
-    EpochMismatch,
-    Others,
-}
-
 impl PipelineDetails {
     fn new() -> PipelineDetails {
         PipelineDetails {
             pipeline: None,
             parent_pipeline_id: None,
-            most_recent_display_list_epoch: None,
             animations_running: false,
             animation_callbacks_running: false,
             throttled: false,
-            hit_test_items: Vec::new(),
             scroll_tree: ScrollTree::default(),
             first_paint_metric: PaintMetricState::Waiting,
             first_contentful_paint_metric: PaintMetricState::Waiting,
@@ -371,15 +345,12 @@ impl IOCompositor {
             webrender_api: state.webrender_api,
             rendering_context: state.rendering_context,
             webrender_gl: state.webrender_gl,
-            cursor: Cursor::None,
-            cursor_pos: DevicePoint::new(0.0, 0.0),
+            last_mouse_move_position: None,
             wait_for_stable_image,
             convert_mouse_to_touch,
             pending_frames: 0,
             last_animation_tick: Instant::now(),
             is_animating: false,
-            pending_point_input_events: VecDeque::new(),
-            webrender_frame_ready: false,
         };
 
         // Make sure the GL state is OK
@@ -408,38 +379,6 @@ impl IOCompositor {
     /// Get the current size of the rendering context.
     pub fn rendering_context_size(&self) -> Size2D<u32, DevicePixel> {
         self.rendering_context.size2d()
-    }
-
-    fn update_cursor_from_hittest(&mut self, pos: DevicePoint, result: &CompositorHitTestResult) {
-        if let Some(webview_id) = self
-            .pipeline_details(result.pipeline_id)
-            .pipeline
-            .as_ref()
-            .map(|composition_pipeline| composition_pipeline.webview_id)
-        {
-            self.update_cursor(pos, webview_id, result.cursor);
-        } else {
-            warn!("Couldn't update cursor for non-WebView-associated pipeline");
-        };
-    }
-
-    fn update_cursor(&mut self, pos: DevicePoint, webview_id: WebViewId, cursor: Option<Cursor>) {
-        self.cursor_pos = pos;
-
-        let cursor = match cursor {
-            Some(cursor) if cursor != self.cursor => cursor,
-            _ => return,
-        };
-
-        self.cursor = cursor;
-        if let Err(e) = self
-            .constellation_chan
-            .send(EmbedderToConstellationMessage::SetCursor(
-                webview_id, cursor,
-            ))
-        {
-            warn!("Sending event to constellation failed ({:?}).", e);
-        }
     }
 
     /// Tell compositor to start shutting down.
@@ -569,21 +508,7 @@ impl IOCompositor {
             }
 
             CompositorMsg::NewWebRenderFrameReady(_document_id, recomposite_needed) => {
-                self.pending_frames -= 1;
-                let point: DevicePoint = self.cursor_pos;
-
-                if recomposite_needed {
-                    let details_for_pipeline =
-                        |pipeline_id| self.pipeline_details.get(&pipeline_id);
-                    let result = self.hit_test_at_point(point, details_for_pipeline);
-                    if let Ok(result) = result {
-                        self.update_cursor_from_hittest(point, &result);
-                    }
-                }
-
-                if recomposite_needed || self.animation_callbacks_running() {
-                    self.set_needs_repaint(RepaintReason::NewWebRenderFrame);
-                }
+                self.handle_new_webrender_frame_ready(recomposite_needed);
             }
 
             CompositorMsg::LoadComplete(_) => {
@@ -597,8 +522,7 @@ impl IOCompositor {
                 let mut txn = Transaction::new();
                 txn.set_display_list(WebRenderEpoch(0), (pipeline, Default::default()));
                 self.generate_frame(&mut txn, RenderReasons::SCENE);
-                self.webrender_api
-                    .send_transaction(self.webrender_document, txn);
+                self.send_transaction(txn);
             }
 
             CompositorMsg::SendScrollNode(_webview_id, pipeline_id, offset, external_scroll_id) => {
@@ -630,8 +554,7 @@ impl IOCompositor {
                     }],
                 );
                 self.generate_frame(&mut txn, RenderReasons::APZ);
-                self.webrender_api
-                    .send_transaction(self.webrender_document, txn);
+                self.send_transaction(txn);
             }
 
             CompositorMsg::SendDisplayList {
@@ -686,13 +609,8 @@ impl IOCompositor {
                     display_list_descriptor,
                 );
 
-                // WebRender is not ready until we receive "NewWebRenderFrameReady"
-                self.webrender_frame_ready = false;
-
                 let pipeline_id = display_list_info.pipeline_id;
                 let details = self.pipeline_details(pipeline_id.into());
-                details.most_recent_display_list_epoch = Some(display_list_info.epoch);
-                details.hit_test_items = display_list_info.hit_test_info;
                 details.install_new_scroll_tree(display_list_info.scroll_tree);
 
                 let epoch = display_list_info.epoch;
@@ -712,33 +630,7 @@ impl IOCompositor {
                     .set_display_list(display_list_info.epoch, (pipeline_id, built_display_list));
                 self.update_transaction_with_all_scroll_offsets(&mut transaction);
                 self.generate_frame(&mut transaction, RenderReasons::SCENE);
-                self.webrender_api
-                    .send_transaction(self.webrender_document, transaction);
-            }
-
-            CompositorMsg::HitTest(pipeline, point, flags, sender) => {
-                // When a display list is sent to WebRender, it starts scene building in a
-                // separate thread and then that display list is available for hit testing.
-                // Without flushing scene building, any hit test we do might be done against
-                // a previous scene, if the last one we sent hasn't finished building.
-                //
-                // TODO(mrobinson): Flushing all scene building is a big hammer here, because
-                // we might only be interested in a single pipeline. The only other option
-                // would be to listen to the TransactionNotifier for previous per-pipeline
-                // transactions, but that isn't easily compatible with the event loop wakeup
-                // mechanism from libserver.
-                self.webrender_api.flush_scene_builder();
-
-                let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
-                let result = self
-                    .hit_test_at_point_with_flags_and_pipeline(
-                        point,
-                        flags,
-                        pipeline,
-                        get_pipeline_details,
-                    )
-                    .unwrap_or_default();
-                let _ = sender.send(result);
+                self.send_transaction(transaction);
             }
 
             CompositorMsg::GenerateImageKey(sender) => {
@@ -772,8 +664,7 @@ impl IOCompositor {
                         }
                     }
                 }
-                self.webrender_api
-                    .send_transaction(self.webrender_document, txn);
+                self.send_transaction(txn);
             }
 
             CompositorMsg::AddFont(font_key, data, index) => {
@@ -783,8 +674,7 @@ impl IOCompositor {
             CompositorMsg::AddSystemFont(font_key, native_handle) => {
                 let mut transaction = Transaction::new();
                 transaction.add_native_font(font_key, native_handle);
-                self.webrender_api
-                    .send_transaction(self.webrender_document, transaction);
+                self.send_transaction(transaction);
             }
 
             CompositorMsg::AddFontInstance(font_instance_key, font_key, size, flags) => {
@@ -801,8 +691,7 @@ impl IOCompositor {
                     transaction.delete_font(key);
                 }
 
-                self.webrender_api
-                    .send_transaction(self.webrender_document, transaction);
+                self.send_transaction(transaction);
             }
 
             CompositorMsg::GenerateFontKeys(
@@ -954,8 +843,7 @@ impl IOCompositor {
         let mut transaction = Transaction::new();
         self.send_root_pipeline_display_list_in_transaction(&mut transaction, window);
         self.generate_frame(&mut transaction, RenderReasons::SCENE);
-        self.webrender_api
-            .send_transaction(self.webrender_document, transaction);
+        self.send_transaction(transaction);
     }
 
     /// Set the root pipeline for our WebRender scene to a display list that consists of an iframe
@@ -1312,8 +1200,7 @@ impl IOCompositor {
         self.viewport = new_viewport;
         let mut transaction = Transaction::new();
         transaction.set_document_view(DeviceIntRect::from_size(self.viewport.to_i32()));
-        self.webrender_api
-            .send_transaction(self.webrender_document, transaction);
+        self.send_transaction(transaction);
         self.set_needs_repaint(RepaintReason::Resize);
     }
 
@@ -1331,35 +1218,38 @@ impl IOCompositor {
     }
 
     /// Dispatch input event to constellation.
-    fn dispatch_input_event(&mut self, webview_id: WebViewId, event: InputEvent) {
+    fn dispatch_input_event(&mut self, webview_id: WebViewId, mut event: InputEvent) {
         // Events that do not need to do hit testing are sent directly to the
         // constellation to filter down.
         let Some(point) = event.point() else {
             return;
         };
 
-        // Delay the event if the epoch is not synchronized yet (new frame is not ready),
-        // or hit test result would fail and the event is rejected anyway.
-        if !self.webrender_frame_ready || !self.pending_point_input_events.is_empty() {
-            self.pending_point_input_events.push_back(event);
-            return;
-        }
-
         // If we can't find a pipeline to send this event to, we cannot continue.
-        let result = match self
-            .hit_test_at_point(point, |pipeline_id| self.pipeline_details.get(&pipeline_id))
-        {
-            Ok(hit_test_results) => hit_test_results,
-            Err(HitTestError::EpochMismatch) => {
-                self.pending_point_input_events.push_back(event);
-                return;
-            }
-            _ => {
-                return;
-            }
+        let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
+        let Some(result) = self
+            .hit_test_at_point(point, get_pipeline_details)
+            .into_iter()
+            .nth(0)
+        else {
+            warn!("Empty hit test result for input event, ignoring.");
+            return;
         };
 
-        self.update_cursor_from_hittest(point, &result);
+        match event {
+            InputEvent::Touch(ref mut _touch_event) => {
+                // FIXME
+                // touch_event.init_sequence_id(self.touch_handler.current_sequence_id);
+            }
+            InputEvent::MouseMove(_) => {
+                self.last_mouse_move_position = Some(point);
+            }
+            InputEvent::MouseLeave(_) => {
+                self.last_mouse_move_position = None;
+            }
+            InputEvent::MouseButton(_) | InputEvent::Wheel(_) => {}
+            _ => unreachable!("Unexpected input event type: {event:?}"),
+        }
 
         if let Err(error) =
             self.constellation_chan
@@ -1373,44 +1263,17 @@ impl IOCompositor {
         }
     }
 
-    // TODO: This function duplicates a lot of `dispatch_point_input_event.
-    // Perhaps it should just be called here instead.
-    pub(crate) fn dispatch_pending_point_input_events(&mut self, webview_id: WebViewId) {
-        while let Some(event) = self.pending_point_input_events.pop_front() {
-            // Events that do not need to do hit testing are sent directly to the
-            // constellation to filter down.
-            let Some(point) = event.point() else {
-                continue;
-            };
-
-            // If we can't find a pipeline to send this event to, we cannot continue.
-            let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
-            let Ok(result) = self.hit_test_at_point(point, get_pipeline_details) else {
-                // Don't need to process pending input events in this frame any more.
-                // TODO: Add multiple retry later if needed.
-                return;
-            };
-
-            self.update_cursor_from_hittest(point, &result);
-
-            if let Err(error) =
-                self.constellation_chan
-                    .send(EmbedderToConstellationMessage::ForwardInputEvent(
-                        webview_id,
-                        event,
-                        Some(result),
-                    ))
-            {
-                warn!("Sending event to constellation failed ({error:?}).");
-            }
-        }
-    }
-
     /// Handle the input event in the window.
     pub fn on_input_event(&mut self, webview_id: WebViewId, event: InputEvent) {
         if self.shutdown_state != ShutdownState::NotShuttingDown {
             return;
         }
+
+        if let InputEvent::Touch(event) = event {
+            self.on_touch_event(webview_id, event);
+            return;
+        }
+
         if self.convert_mouse_to_touch {
             match event {
                 InputEvent::MouseButton(event) => {
@@ -1444,55 +1307,31 @@ impl IOCompositor {
         &self,
         point: DevicePoint,
         details_for_pipeline: impl Fn(PipelineId) -> Option<&'a PipelineDetails>,
-    ) -> Result<CompositorHitTestResult, HitTestError> {
-        match self.hit_test_at_point_with_flags_and_pipeline(
-            point,
-            HitTestFlags::empty(),
-            None,
-            details_for_pipeline,
-        ) {
-            Ok(hit_test_results) => hit_test_results
-                .first()
-                .cloned()
-                .ok_or(HitTestError::Others),
-            Err(error) => Err(error),
-        }
+    ) -> Vec<CompositorHitTestResult> {
+        self.hit_test_at_point_with_flags(point, HitTestFlags::empty(), details_for_pipeline)
     }
 
-    fn hit_test_at_point_with_flags_and_pipeline<'a>(
+    fn hit_test_at_point_with_flags<'a>(
         &self,
         point: DevicePoint,
         flags: HitTestFlags,
-        pipeline_id: Option<WebRenderPipelineId>,
         details_for_pipeline: impl Fn(PipelineId) -> Option<&'a PipelineDetails>,
-    ) -> Result<Vec<CompositorHitTestResult>, HitTestError> {
+    ) -> Vec<CompositorHitTestResult> {
         // DevicePoint and WorldPoint are the same for us.
         let world_point = WorldPoint::from_untyped(point.to_untyped());
-        let results =
-            self.webrender_api
-                .hit_test(self.webrender_document, pipeline_id, world_point, flags);
+        let results = self.webrender_api.hit_test(
+            self.webrender_document,
+            None, /* pipeline_id */
+            world_point,
+            flags,
+        );
 
-        let mut epoch_mismatch = false;
-        let results = results
+        results
             .items
             .iter()
             .filter_map(|item| {
                 let pipeline_id = item.pipeline.into();
                 let details = details_for_pipeline(pipeline_id)?;
-
-                // If the epoch in the tag does not match the current epoch of the pipeline,
-                // then the hit test is against an old version of the display list.
-                match details.most_recent_display_list_epoch {
-                    Some(epoch) => {
-                        if epoch.as_u16() != item.tag.1 {
-                            // It's too early to hit test for now.
-                            // New scene building is in progress.
-                            epoch_mismatch = true;
-                            return None;
-                        }
-                    }
-                    _ => return None,
-                }
 
                 let offset = details
                     .scroll_tree
@@ -1501,28 +1340,23 @@ impl IOCompositor {
                 let point_in_initial_containing_block =
                     (item.point_in_viewport + offset).to_untyped();
 
-                let info = &details.hit_test_items[item.tag.0 as usize];
+                let external_scroll_id = ExternalScrollId(item.tag.0, item.pipeline);
+
                 Some(CompositorHitTestResult {
                     pipeline_id,
                     point_in_viewport: Point2D::from_untyped(item.point_in_viewport.to_untyped()),
                     point_relative_to_initial_containing_block: Point2D::from_untyped(
                         point_in_initial_containing_block,
                     ),
-                    point_relative_to_item: Point2D::from_untyped(
-                        item.point_relative_to_item.to_untyped(),
-                    ),
-                    node: UntrustedNodeAddress(info.node as *const c_void),
-                    cursor: info.cursor,
-                    scroll_tree_node: info.scroll_tree_node,
+                    external_scroll_id,
                 })
             })
-            .collect();
+            .collect()
+    }
 
-        if epoch_mismatch {
-            return Err(HitTestError::EpochMismatch);
-        }
-
-        Ok(results)
+    fn send_transaction(&mut self, transaction: Transaction) {
+        self.webrender_api
+            .send_transaction(self.webrender_document, transaction);
     }
 
     fn send_touch_event(&mut self, webview_id: WebViewId, event: TouchEvent) {
@@ -1707,8 +1541,6 @@ impl IOCompositor {
             )
         });
 
-        let mut transaction = Transaction::new();
-
         if let Some(ScrollResult {
             hit_test_result,
             external_scroll_id,
@@ -1716,7 +1548,9 @@ impl IOCompositor {
             ..
         }) = scroll_result
         {
-            let offset = LayoutVector2D::new(-offset.x, -offset.y);
+            self.send_scroll_positions_to_layout_for_pipeline(hit_test_result.pipeline_id);
+
+            let mut transaction = Transaction::new();
             transaction.set_scroll_offsets(
                 external_scroll_id,
                 vec![SampledScrollOffset {
@@ -1724,12 +1558,10 @@ impl IOCompositor {
                     generation: 0,
                 }],
             );
-            self.send_scroll_positions_to_layout_for_pipeline(hit_test_result.pipeline_id);
-        }
 
-        self.generate_frame(&mut transaction, RenderReasons::APZ);
-        self.webrender_api
-            .send_transaction(self.webrender_document, transaction);
+            self.generate_frame(&mut transaction, RenderReasons::APZ);
+            self.send_transaction(transaction);
+        }
     }
 
     /// Perform a hit test at the given [`DevicePoint`] and apply the [`ScrollLocation`]
@@ -1755,14 +1587,8 @@ impl IOCompositor {
         };
 
         let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
-        let hit_test_results = self
-            .hit_test_at_point_with_flags_and_pipeline(
-                cursor,
-                HitTestFlags::FIND_ALL,
-                None,
-                get_pipeline_details,
-            )
-            .unwrap_or_default();
+        let hit_test_results =
+            self.hit_test_at_point_with_flags(cursor, HitTestFlags::FIND_ALL, get_pipeline_details);
 
         // Iterate through all hit test results, processing only the first node of each pipeline.
         // This is needed to propagate the scroll events from a pipeline representing an iframe to
@@ -1776,7 +1602,7 @@ impl IOCompositor {
                 != Some(&hit_test_result.pipeline_id)
             {
                 let scroll_result = pipeline_details.scroll_tree.scroll_node_or_ancestor(
-                    &hit_test_result.scroll_tree_node,
+                    &hit_test_result.external_scroll_id,
                     scroll_location,
                     ScrollType::InputEvents,
                 );
@@ -2058,12 +1884,6 @@ impl IOCompositor {
                 CompositorMsg::NewWebRenderFrameReady(..) => {
                     found_recomposite_msg = true;
 
-                    let webviews: Vec<_> = self.webviews.keys().copied().collect();
-                    for webview in webviews {
-                        self.dispatch_pending_point_input_events(webview);
-                    }
-                    self.webrender_frame_ready = true;
-
                     compositor_messages.push(msg)
                 }
                 _ => compositor_messages.push(msg),
@@ -2115,8 +1935,7 @@ impl IOCompositor {
 
         let mut txn = Transaction::new();
         self.generate_frame(&mut txn, RenderReasons::TESTING);
-        self.webrender_api
-            .send_transaction(self.webrender_document, txn);
+        self.send_transaction(txn);
     }
 
     fn add_font_instance(
@@ -2139,15 +1958,13 @@ impl IOCompositor {
             None,
             Vec::new(),
         );
-        self.webrender_api
-            .send_transaction(self.webrender_document, transaction);
+        self.send_transaction(transaction);
     }
 
     fn add_font(&mut self, font_key: FontKey, index: u32, data: Arc<IpcSharedMemory>) {
         let mut transaction = Transaction::new();
         transaction.add_raw_font(font_key, (**data).into(), index);
-        self.webrender_api
-            .send_transaction(self.webrender_document, transaction);
+        self.send_transaction(transaction);
     }
 
     /// Send all pending paint metrics messages after a composite operation, which may advance
@@ -2207,6 +2024,41 @@ impl IOCompositor {
                 }
                 _ => {}
             }
+        }
+    }
+
+    fn refresh_cursor(&self) {
+        let Some(last_mouse_move_position) = self.last_mouse_move_position else {
+            return;
+        };
+
+        let details_for_pipeline = |pipeline_id| self.pipeline_details.get(&pipeline_id);
+        let Some(hit_test_result) = self
+            .hit_test_at_point(last_mouse_move_position, details_for_pipeline)
+            .first()
+            .cloned()
+        else {
+            return;
+        };
+
+        if let Err(error) =
+            self.constellation_chan
+                .send(EmbedderToConstellationMessage::RefreshCursor(
+                    hit_test_result.pipeline_id,
+                    hit_test_result.point_in_viewport,
+                ))
+        {
+            warn!("Sending event to constellation failed ({:?}).", error);
+        }
+    }
+
+    fn handle_new_webrender_frame_ready(&mut self, recomposite_needed: bool) {
+        self.pending_frames -= 1;
+        if recomposite_needed {
+            self.refresh_cursor();
+        }
+        if recomposite_needed || self.animation_callbacks_running() {
+            self.set_needs_repaint(RepaintReason::NewWebRenderFrame);
         }
     }
 }
