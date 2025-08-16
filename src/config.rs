@@ -14,7 +14,7 @@ use net_traits::{
     response::{Response, ResponseBody},
 };
 use servo_config::{
-    opts::{Opts, OutputOptions, set_options},
+    opts::{Opts, OutputOptions, initialize_options},
     prefs::Preferences,
 };
 use versoview_messages::{ConfigFromController, CustomProtocol, UserScript};
@@ -440,7 +440,7 @@ impl Config {
         }
 
         // Set the global options of Servo.
-        set_options(opts);
+        initialize_options(opts);
 
         let (devtools_server_enabled, devtools_port) =
             if let Some(devtools_port) = self.devtools_port {

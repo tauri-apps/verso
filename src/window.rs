@@ -5,8 +5,8 @@ use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::Sender;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg, FocusId, ImeEvent,
-    InputEvent, MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeaveEvent, MouseMoveEvent,
-    Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails,
+    InputEvent, MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
+    MouseMoveEvent, Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails,
     WebResourceResponseMsg, WheelMode,
 };
 use euclid::{Point2D, Scale, Size2D};
@@ -438,20 +438,17 @@ impl Window {
                 compositor.swap_current_window(self);
             }
             WindowEvent::CursorLeft { .. } => {
-                let position = self.mouse_position.take();
                 let hovering_webview = self.hovering_webview.take();
-                if let (Some(position), Some(hovering_webview)) = (position, hovering_webview) {
-                    let point: DevicePoint = DevicePoint::new(position.x as f32, position.y as f32);
+                if let Some(hovering_webview) = hovering_webview {
                     forward_input_event(
                         compositor,
                         hovering_webview,
                         sender,
-                        InputEvent::MouseLeave(MouseLeaveEvent::new(point)),
+                        InputEvent::MouseLeftViewport(MouseLeftViewportEvent::default()),
                     );
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
-                let last_position = self.mouse_position.get().unwrap_or(*position).cast();
                 self.mouse_position.set(Some(*position));
 
                 let point = DevicePoint::new(position.x as f32, position.y as f32);
@@ -461,12 +458,11 @@ impl Window {
 
                 if last_hovering_webview != target_webview {
                     if let Some(last_hovering_webview) = last_hovering_webview {
-                        let last_point = DevicePoint::new(last_position.x, last_position.y);
                         forward_input_event(
                             compositor,
                             last_hovering_webview,
                             sender,
-                            InputEvent::MouseLeave(MouseLeaveEvent::new(last_point)),
+                            InputEvent::MouseLeftViewport(MouseLeftViewportEvent::default()),
                         );
                     }
                 }
