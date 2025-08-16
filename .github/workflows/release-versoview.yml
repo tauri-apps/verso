@@ -113,9 +113,9 @@ jobs:
 
       - name: Install dependencies
         run: |
-          curl https://gstreamer.freedesktop.org/data/pkg/osx/1.24.6/gstreamer-1.0-1.24.6-universal.pkg -o runtime.pkg
+          curl https://gstreamer.freedesktop.org/data/pkg/osx/1.26.5/gstreamer-1.0-1.26.5-universal.pkg -o runtime.pkg
           sudo installer -pkg runtime.pkg -target /
-          curl https://gstreamer.freedesktop.org/data/pkg/osx/1.24.6/gstreamer-1.0-devel-1.24.6-universal.pkg -o develop.pkg
+          curl https://gstreamer.freedesktop.org/data/pkg/osx/1.26.5/gstreamer-1.0-devel-1.26.5-universal.pkg -o develop.pkg
           sudo installer -pkg develop.pkg -target /
 
       - name: Add rust target

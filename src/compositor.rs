@@ -1218,22 +1218,22 @@ impl IOCompositor {
     }
 
     /// Dispatch input event to constellation.
-    fn dispatch_input_event(&mut self, webview_id: WebViewId, mut event: InputEvent) {
-        // Events that do not need to do hit testing are sent directly to the
-        // constellation to filter down.
-        let Some(point) = event.point() else {
-            return;
-        };
-
-        // If we can't find a pipeline to send this event to, we cannot continue.
-        let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
-        let Some(result) = self
-            .hit_test_at_point(point, get_pipeline_details)
-            .into_iter()
-            .nth(0)
-        else {
-            warn!("Empty hit test result for input event, ignoring.");
-            return;
+    fn dispatch_input_event_with_hit_testing(
+        &mut self,
+        webview_id: WebViewId,
+        mut event: InputEvent,
+    ) -> bool {
+        let event_point = event.point();
+        let hit_test_result = match event_point {
+            Some(point) => {
+                let hit_test_result = self.hit_test_at_point(point).into_iter().nth(0);
+                if hit_test_result.is_none() {
+                    warn!("Empty hit test result for input event, ignoring.");
+                    return false;
+                }
+                hit_test_result
+            }
+            None => None,
         };
 
         match event {
@@ -1242,9 +1242,9 @@ impl IOCompositor {
                 // touch_event.init_sequence_id(self.touch_handler.current_sequence_id);
             }
             InputEvent::MouseMove(_) => {
-                self.last_mouse_move_position = Some(point);
+                self.last_mouse_move_position = event_point;
             }
-            InputEvent::MouseLeave(_) => {
+            InputEvent::MouseLeftViewport(_) => {
                 self.last_mouse_move_position = None;
             }
             InputEvent::MouseButton(_) | InputEvent::Wheel(_) => {}
@@ -1256,10 +1256,13 @@ impl IOCompositor {
                 .send(EmbedderToConstellationMessage::ForwardInputEvent(
                     webview_id,
                     event,
-                    Some(result),
+                    hit_test_result,
                 ))
         {
             warn!("Sending event to constellation failed ({error:?}).");
+            false
+        } else {
+            true
         }
     }
 
@@ -1300,22 +1303,17 @@ impl IOCompositor {
                 _ => {}
             }
         }
-        self.dispatch_input_event(webview_id, event);
+        self.dispatch_input_event_with_hit_testing(webview_id, event);
     }
 
-    fn hit_test_at_point<'a>(
-        &self,
-        point: DevicePoint,
-        details_for_pipeline: impl Fn(PipelineId) -> Option<&'a PipelineDetails>,
-    ) -> Vec<CompositorHitTestResult> {
-        self.hit_test_at_point_with_flags(point, HitTestFlags::empty(), details_for_pipeline)
+    fn hit_test_at_point(&self, point: DevicePoint) -> Vec<CompositorHitTestResult> {
+        self.hit_test_at_point_with_flags(point, HitTestFlags::empty())
     }
 
-    fn hit_test_at_point_with_flags<'a>(
+    fn hit_test_at_point_with_flags(
         &self,
         point: DevicePoint,
         flags: HitTestFlags,
-        details_for_pipeline: impl Fn(PipelineId) -> Option<&'a PipelineDetails>,
     ) -> Vec<CompositorHitTestResult> {
         // DevicePoint and WorldPoint are the same for us.
         let world_point = WorldPoint::from_untyped(point.to_untyped());
@@ -1329,27 +1327,14 @@ impl IOCompositor {
         results
             .items
             .iter()
-            .filter_map(|item| {
+            .map(|item| {
                 let pipeline_id = item.pipeline.into();
-                let details = details_for_pipeline(pipeline_id)?;
-
-                let offset = details
-                    .scroll_tree
-                    .scroll_offset(pipeline_id.root_scroll_id())
-                    .unwrap_or_default();
-                let point_in_initial_containing_block =
-                    (item.point_in_viewport + offset).to_untyped();
-
                 let external_scroll_id = ExternalScrollId(item.tag.0, item.pipeline);
-
-                Some(CompositorHitTestResult {
+                CompositorHitTestResult {
                     pipeline_id,
                     point_in_viewport: Point2D::from_untyped(item.point_in_viewport.to_untyped()),
-                    point_relative_to_initial_containing_block: Point2D::from_untyped(
-                        point_in_initial_containing_block,
-                    ),
                     external_scroll_id,
-                })
+                }
             })
             .collect()
     }
@@ -1360,7 +1345,7 @@ impl IOCompositor {
     }
 
     fn send_touch_event(&mut self, webview_id: WebViewId, event: TouchEvent) {
-        self.dispatch_input_event(webview_id, InputEvent::Touch(event))
+        self.dispatch_input_event_with_hit_testing(webview_id, InputEvent::Touch(event));
     }
 
     /// Handle touch event.
@@ -1427,11 +1412,11 @@ impl IOCompositor {
     /// <http://w3c.github.io/touch-events/#mouse-events>
     fn simulate_mouse_click(&mut self, webview_id: WebViewId, point: DevicePoint) {
         let button = MouseButton::Left;
-        self.dispatch_input_event(
+        self.dispatch_input_event_with_hit_testing(
             webview_id,
             InputEvent::MouseMove(MouseMoveEvent::new(point)),
         );
-        self.dispatch_input_event(
+        self.dispatch_input_event_with_hit_testing(
             webview_id,
             InputEvent::MouseButton(MouseButtonEvent::new(
                 MouseButtonAction::Down,
@@ -1439,11 +1424,11 @@ impl IOCompositor {
                 point,
             )),
         );
-        self.dispatch_input_event(
+        self.dispatch_input_event_with_hit_testing(
             webview_id,
             InputEvent::MouseButton(MouseButtonEvent::new(MouseButtonAction::Up, button, point)),
         );
-        self.dispatch_input_event(
+        self.dispatch_input_event_with_hit_testing(
             webview_id,
             InputEvent::MouseButton(MouseButtonEvent::new(
                 MouseButtonAction::Click,
@@ -1586,9 +1571,7 @@ impl IOCompositor {
             ScrollLocation::Start | ScrollLocation::End => scroll_location,
         };
 
-        let get_pipeline_details = |pipeline_id| self.pipeline_details.get(&pipeline_id);
-        let hit_test_results =
-            self.hit_test_at_point_with_flags(cursor, HitTestFlags::FIND_ALL, get_pipeline_details);
+        let hit_test_results = self.hit_test_at_point_with_flags(cursor, HitTestFlags::FIND_ALL);
 
         // Iterate through all hit test results, processing only the first node of each pipeline.
         // This is needed to propagate the scroll events from a pipeline representing an iframe to
@@ -2032,9 +2015,8 @@ impl IOCompositor {
             return;
         };
 
-        let details_for_pipeline = |pipeline_id| self.pipeline_details.get(&pipeline_id);
         let Some(hit_test_result) = self
-            .hit_test_at_point(last_mouse_move_position, details_for_pipeline)
+            .hit_test_at_point(last_mouse_move_position)
             .first()
             .cloned()
         else {
