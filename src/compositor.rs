@@ -43,9 +43,9 @@ use webrender_api::{
     BorderRadius, BoxShadowClipMode, BuiltDisplayList, ClipMode, ColorF, CommonItemProperties,
     ComplexClipRegion, DirtyRect, DisplayListPayload, DocumentId, Epoch as WebRenderEpoch,
     ExternalScrollId, FontInstanceFlags, FontInstanceKey, FontInstanceOptions, FontKey,
-    HitTestFlags, PipelineId as WebRenderPipelineId, PropertyBinding, ReferenceFrameKind,
-    RenderReasons, SampledScrollOffset, ScrollLocation, SpaceAndClipInfo, SpatialId,
-    SpatialTreeItemKey, TransformStyle,
+    FontVariation, HitTestFlags, PipelineId as WebRenderPipelineId, PropertyBinding,
+    ReferenceFrameKind, RenderReasons, SampledScrollOffset, ScrollLocation, SpaceAndClipInfo,
+    SpatialId, SpatialTreeItemKey, TransformStyle,
 };
 use winit::window::WindowId;
 
@@ -677,8 +677,14 @@ impl IOCompositor {
                 self.send_transaction(transaction);
             }
 
-            CompositorMsg::AddFontInstance(font_instance_key, font_key, size, flags) => {
-                self.add_font_instance(font_instance_key, font_key, size, flags);
+            CompositorMsg::AddFontInstance(
+                font_instance_key,
+                font_key,
+                size,
+                flags,
+                variations,
+            ) => {
+                self.add_font_instance(font_instance_key, font_key, size, flags, variations);
             }
 
             CompositorMsg::RemoveFonts(keys, instance_keys) => {
@@ -1927,7 +1933,14 @@ impl IOCompositor {
         font_key: FontKey,
         size: f32,
         flags: FontInstanceFlags,
+        variations: Vec<FontVariation>,
     ) {
+        let variations = if pref!(layout_variable_fonts_enabled) {
+            variations
+        } else {
+            vec![]
+        };
+
         let mut transaction = Transaction::new();
         let font_instance_options = FontInstanceOptions {
             flags,
@@ -1939,7 +1952,7 @@ impl IOCompositor {
             size,
             Some(font_instance_options),
             None,
-            Vec::new(),
+            variations,
         );
         self.send_transaction(transaction);
     }
@@ -2027,7 +2040,6 @@ impl IOCompositor {
             self.constellation_chan
                 .send(EmbedderToConstellationMessage::RefreshCursor(
                     hit_test_result.pipeline_id,
-                    hit_test_result.point_in_viewport,
                 ))
         {
             warn!("Sending event to constellation failed ({:?}).", error);
