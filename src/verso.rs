@@ -608,8 +608,7 @@ impl Verso {
 
         while let Ok(msg) = webdriver_receiver.try_recv() {
             match msg {
-                WebDriverCommandMsg::SendKeys(..)
-                | WebDriverCommandMsg::KeyboardAction(..)
+                WebDriverCommandMsg::KeyboardAction(..)
                 | WebDriverCommandMsg::MouseButtonAction(..)
                 | WebDriverCommandMsg::MouseMoveAction(..)
                 | WebDriverCommandMsg::WheelScrollAction(..)
