@@ -5,7 +5,10 @@ use std::{
 };
 
 use arboard::Clipboard;
-use base::id::{PipelineNamespace, PipelineNamespaceId, WebViewId};
+use base::{
+    generic_channel::RoutedReceiver,
+    id::{PipelineNamespace, PipelineNamespaceId, WebViewId},
+};
 use bluetooth::BluetoothThreadFactory;
 use bluetooth_traits::BluetoothRequest;
 use compositing_traits::{
@@ -452,7 +455,18 @@ impl Verso {
         // Handle Compositor's messages first
         log::trace!("Verso is handling Compositor messages");
 
-        compositor.handle_messages(&mut self.windows);
+        let mut messages = Vec::new();
+        while let Ok(message) = compositor.compositor_receiver.try_recv() {
+            match message {
+                Ok(message) => messages.push(message),
+                Err(error) => {
+                    log::warn!(
+                        "Router deserialization error: {error}. Ignoring this CompositorMsg."
+                    )
+                }
+            }
+        }
+        compositor.handle_messages(&mut self.windows, messages);
 
         // Only handle incoming embedder messages if the compositor hasn't already started shutting down.
         while let Ok(msg) = self.embedder_receiver.try_recv() {
@@ -1152,13 +1166,13 @@ fn create_embedder_channel(
 
 fn create_compositor_channel(
     event_loop_waker: Box<dyn EventLoopWaker>,
-) -> (CompositorProxy, Receiver<CompositorMsg>) {
+) -> (CompositorProxy, RoutedReceiver<CompositorMsg>) {
     let (sender, receiver) = unbounded();
 
     let (compositor_ipc_sender, compositor_ipc_receiver) =
         ipc::channel().expect("ipc channel failure");
 
-    let cross_process_compositor_api = CrossProcessCompositorApi(compositor_ipc_sender);
+    let cross_process_compositor_api = CrossProcessCompositorApi::new(compositor_ipc_sender);
     let compositor_proxy = CompositorProxy {
         sender,
         cross_process_compositor_api,
@@ -1169,7 +1183,7 @@ fn create_compositor_channel(
     ROUTER.add_typed_route(
         compositor_ipc_receiver,
         Box::new(move |message| {
-            compositor_proxy_clone.send(message.expect("Could not convert Compositor message"));
+            compositor_proxy_clone.route_msg(message);
         }),
     );
 
