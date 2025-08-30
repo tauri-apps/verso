@@ -472,7 +472,7 @@ impl IOCompositor {
             ) => {
                 if self.change_pipeline_running_animations_state(pipeline_id, animation_state) {
                     // These operations should eventually happen per-WebView, but they are
-                    // self now as rendering is still self to all WebViews.
+                    // global now as rendering is still global to all WebViews.
                     self.process_animations(true);
                 }
             }
