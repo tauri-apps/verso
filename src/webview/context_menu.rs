@@ -1,6 +1,5 @@
 use crate::verso::send_to_constellation;
 use crate::window::Window;
-#[cfg(any(target_os = "macos", target_os = "windows"))]
 use base::generic_channel::GenericSender;
 use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 #[cfg(linux)]
@@ -74,7 +73,10 @@ impl ContextMenu {
     /// **Platform Specific**
     /// - macOS / Windows: Creates a context menu by muda crate with natvie OS support
     /// - Wayland: Creates a context menu with webview implementation
-    pub fn new_with_menu(servo_result_sender: GenericSender<ContextMenuResult>, menu: Menu) -> Self {
+    pub fn new_with_menu(
+        servo_result_sender: GenericSender<ContextMenuResult>,
+        menu: Menu,
+    ) -> Self {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             Self {
@@ -264,7 +266,7 @@ impl Window {
     pub(crate) fn show_context_menu(
         &mut self,
         sender: &Sender<EmbedderToConstellationMessage>,
-        servo_sender: IpcSender<ContextMenuResult>,
+        servo_sender: GenericSender<ContextMenuResult>,
     ) -> ContextMenu {
         let tab = self.tab_manager.current_tab().unwrap();
         let history = tab.history();
