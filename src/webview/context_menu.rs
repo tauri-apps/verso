@@ -1,10 +1,10 @@
 use crate::verso::send_to_constellation;
 use crate::window::Window;
+use base::generic_channel::GenericSender;
 use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 #[cfg(linux)]
 use embedder_traits::ViewportDetails;
 use embedder_traits::{ContextMenuResult, TraversalId};
-use ipc_channel::ipc::IpcSender;
 
 /* macOS, Windows Native Implementation */
 #[cfg(any(target_os = "macos", target_os = "windows"))]
@@ -54,7 +54,7 @@ pub struct Menu(pub Vec<MenuItem>);
 #[derive(Clone)]
 pub struct ContextMenu {
     /// IpcSender to send the context menu result to the Servo
-    servo_result_sender: Option<IpcSender<ContextMenuResult>>, // None if sender already sent
+    servo_result_sender: Option<GenericSender<ContextMenuResult>>, // None if sender already sent
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     menu: MudaMenu,
     #[cfg(linux)]
@@ -73,7 +73,10 @@ impl ContextMenu {
     /// **Platform Specific**
     /// - macOS / Windows: Creates a context menu by muda crate with natvie OS support
     /// - Wayland: Creates a context menu with webview implementation
-    pub fn new_with_menu(servo_result_sender: IpcSender<ContextMenuResult>, menu: Menu) -> Self {
+    pub fn new_with_menu(
+        servo_result_sender: GenericSender<ContextMenuResult>,
+        menu: Menu,
+    ) -> Self {
         #[cfg(any(target_os = "macos", target_os = "windows"))]
         {
             Self {
@@ -232,7 +235,7 @@ impl Window {
     #[cfg(any(target_os = "macos", target_os = "windows"))]
     pub(crate) fn show_context_menu(
         &self,
-        servo_sender: IpcSender<ContextMenuResult>,
+        servo_sender: GenericSender<ContextMenuResult>,
     ) -> ContextMenu {
         use muda::MenuItem;
 
@@ -263,7 +266,7 @@ impl Window {
     pub(crate) fn show_context_menu(
         &mut self,
         sender: &Sender<EmbedderToConstellationMessage>,
-        servo_sender: IpcSender<ContextMenuResult>,
+        servo_sender: GenericSender<ContextMenuResult>,
     ) -> ContextMenu {
         let tab = self.tab_manager.current_tab().unwrap();
         let history = tab.history();

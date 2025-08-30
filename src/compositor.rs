@@ -10,6 +10,7 @@ use crate::touch::{TouchAction, TouchHandler};
 use crate::window::Window;
 use base::Epoch;
 use base::cross_process_instant::CrossProcessInstant;
+use base::generic_channel::RoutedReceiver;
 use base::id::{PipelineId, WebViewId};
 use bitflags::bitflags;
 use compositing_traits::display_list::{CompositorDisplayListInfo, ScrollTree, ScrollType};
@@ -18,7 +19,7 @@ use compositing_traits::{
     SendableFrameTree,
 };
 use constellation_traits::{EmbedderToConstellationMessage, PaintMetricEvent, WindowSizeType};
-use crossbeam_channel::{Receiver, Sender};
+use crossbeam_channel::Sender;
 use dpi::PhysicalSize;
 use embedder_traits::{
     AnimationState, CompositorHitTestResult, InputEvent, MouseButton, MouseButtonAction,
@@ -43,7 +44,7 @@ use webrender_api::{
     BorderRadius, BoxShadowClipMode, BuiltDisplayList, ClipMode, ColorF, CommonItemProperties,
     ComplexClipRegion, DirtyRect, DisplayListPayload, DocumentId, Epoch as WebRenderEpoch,
     ExternalScrollId, FontInstanceFlags, FontInstanceKey, FontInstanceOptions, FontKey,
-    FontVariation, HitTestFlags, PipelineId as WebRenderPipelineId, PropertyBinding,
+    FontVariation, HitTestFlags, ImageKey, PipelineId as WebRenderPipelineId, PropertyBinding,
     ReferenceFrameKind, RenderReasons, SampledScrollOffset, ScrollLocation, SpaceAndClipInfo,
     SpatialId, SpatialTreeItemKey, TransformStyle,
 };
@@ -54,7 +55,7 @@ pub struct InitialCompositorState {
     /// A channel to the compositor.
     pub sender: CompositorProxy,
     /// A port on which messages inbound to the compositor can be received.
-    pub receiver: Receiver<CompositorMsg>,
+    pub receiver: RoutedReceiver<CompositorMsg>,
     /// A channel to the constellation.
     pub constellation_chan: Sender<EmbedderToConstellationMessage>,
     /// A channel to the time profiler thread.
@@ -113,7 +114,7 @@ pub struct IOCompositor {
     webrender_document: DocumentId,
 
     /// The port on which we receive messages.
-    compositor_receiver: Receiver<CompositorMsg>,
+    pub(crate) compositor_receiver: RoutedReceiver<CompositorMsg>,
 
     /// Tracks each webview and its current pipeline
     webviews: HashMap<WebViewId, PipelineId>,
@@ -132,7 +133,7 @@ pub struct IOCompositor {
     frame_tree_id: FrameTreeId,
 
     /// The channel on which messages can be sent to the constellation.
-    pub constellation_chan: Sender<EmbedderToConstellationMessage>,
+    pub constellation_sender: Sender<EmbedderToConstellationMessage>,
 
     /// The channel on which messages can be sent to the time profiler.
     time_profiler_chan: profile_time::ProfilerChan,
@@ -162,6 +163,11 @@ pub struct IOCompositor {
     /// The last position in the rendered view that the mouse moved over. This becomes `None`
     /// when the mouse leaves the rendered view.
     last_mouse_move_position: Option<DevicePoint>,
+
+    /// A [`FrameDelayer`] which is used to wait for canvas image updates to
+    /// arrive before requesting a new frame, as these happen asynchronously with
+    /// `ScriptThread` display list construction.
+    frame_delayer: FrameDelayer,
 
     /// True to exit after page load ('-x').
     wait_for_stable_image: bool,
@@ -337,7 +343,7 @@ impl IOCompositor {
             pending_scroll_zoom_events: Vec::new(),
             shutdown_state: ShutdownState::NotShuttingDown,
             frame_tree_id: FrameTreeId(0),
-            constellation_chan: state.constellation_chan,
+            constellation_sender: state.constellation_chan,
             time_profiler_chan: state.time_profiler_chan,
             ready_to_save_state: ReadyState::Unknown,
             webrender: Some(state.webrender),
@@ -346,6 +352,7 @@ impl IOCompositor {
             rendering_context: state.rendering_context,
             webrender_gl: state.webrender_gl,
             last_mouse_move_position: None,
+            frame_delayer: FrameDelayer::default(),
             wait_for_stable_image,
             convert_mouse_to_touch,
             pending_frames: 0,
@@ -390,7 +397,7 @@ impl IOCompositor {
 
         debug!("Compositor sending Exit message to Constellation");
         if let Err(e) = self
-            .constellation_chan
+            .constellation_sender
             .send(EmbedderToConstellationMessage::Exit)
         {
             warn!("Sending exit message to constellation failed ({:?}).", e);
@@ -629,8 +636,25 @@ impl IOCompositor {
                 transaction
                     .set_display_list(display_list_info.epoch, (pipeline_id, built_display_list));
                 self.update_transaction_with_all_scroll_offsets(&mut transaction);
-                self.generate_frame(&mut transaction, RenderReasons::SCENE);
                 self.send_transaction(transaction);
+            }
+
+            CompositorMsg::GenerateFrame => {
+                self.frame_delayer.set_pending_frame(true);
+
+                if self.frame_delayer.needs_new_frame() {
+                    let mut transaction = Transaction::new();
+                    self.generate_frame(&mut transaction, RenderReasons::SCENE);
+                    self.send_transaction(transaction);
+
+                    let waiting_pipelines = self.frame_delayer.take_waiting_pipelines();
+                    let _ = self.constellation_sender.send(
+                        EmbedderToConstellationMessage::NoLongerWaitingOnAsynchronousImageUpdates(
+                            waiting_pipelines,
+                        ),
+                    );
+                    self.frame_delayer.set_pending_frame(false);
+                }
             }
 
             CompositorMsg::GenerateImageKey(sender) => {
@@ -641,7 +665,7 @@ impl IOCompositor {
                 let image_keys = (0..pref!(image_key_batch_size))
                     .map(|_| self.webrender_api.generate_image_key())
                     .collect();
-                if let Err(error) = self.constellation_chan.send(
+                if let Err(error) = self.constellation_sender.send(
                     EmbedderToConstellationMessage::SendImageKeysForPipeline(
                         pipeline_id,
                         image_keys,
@@ -658,14 +682,36 @@ impl IOCompositor {
                         ImageUpdate::AddImage(key, desc, data) => {
                             txn.add_image(key, desc, data.into(), None)
                         }
-                        ImageUpdate::DeleteImage(key) => txn.delete_image(key),
-                        ImageUpdate::UpdateImage(key, desc, data) => {
+                        ImageUpdate::DeleteImage(key) => {
+                            txn.delete_image(key);
+                            self.frame_delayer.delete_image(key);
+                        }
+                        ImageUpdate::UpdateImage(key, desc, data, epoch) => {
+                            if let Some(epoch) = epoch {
+                                self.frame_delayer.update_image(key, epoch);
+                            }
                             txn.update_image(key, desc, data.into(), &DirtyRect::All)
                         }
                     }
                 }
+
+                if self.frame_delayer.needs_new_frame() {
+                    self.frame_delayer.set_pending_frame(false);
+                    self.generate_frame(&mut txn, RenderReasons::SCENE);
+                    let waiting_pipelines = self.frame_delayer.take_waiting_pipelines();
+                    let _ = self.constellation_sender.send(
+                        EmbedderToConstellationMessage::NoLongerWaitingOnAsynchronousImageUpdates(
+                            waiting_pipelines,
+                        ),
+                    );
+                }
+
                 self.send_transaction(txn);
             }
+
+            CompositorMsg::DelayNewFrameForCanvas(pipeline_id, canvas_epoch, image_keys) => self
+                .frame_delayer
+                .add_delay(pipeline_id, canvas_epoch, image_keys),
 
             CompositorMsg::AddFont(font_key, data, index) => {
                 self.add_font(font_key, index, data);
@@ -1064,7 +1110,7 @@ impl IOCompositor {
             },
             WindowSizeType::Resize,
         );
-        if let Err(e) = self.constellation_chan.send(msg) {
+        if let Err(e) = self.constellation_sender.send(msg) {
             warn!("Sending window resize to constellation failed ({:?}).", e);
         }
     }
@@ -1258,7 +1304,7 @@ impl IOCompositor {
         }
 
         if let Err(error) =
-            self.constellation_chan
+            self.constellation_sender
                 .send(EmbedderToConstellationMessage::ForwardInputEvent(
                     webview_id,
                     event,
@@ -1636,7 +1682,7 @@ impl IOCompositor {
             .collect();
         if !animating_webviews.is_empty() {
             if let Err(error) =
-                self.constellation_chan
+                self.constellation_sender
                     .send(EmbedderToConstellationMessage::TickAnimation(
                         animating_webviews,
                     ))
@@ -1713,7 +1759,7 @@ impl IOCompositor {
         }
 
         let _ = self
-            .constellation_chan
+            .constellation_sender
             .send(EmbedderToConstellationMessage::SetScrollStates(
                 pipeline_id,
                 scroll_offsets,
@@ -1754,7 +1800,7 @@ impl IOCompositor {
                 // Pass the pipeline/epoch states to the constellation and check
                 // if it's safe to output the image.
                 let msg = EmbedderToConstellationMessage::IsReadyToSaveImage(pipeline_epochs);
-                if let Err(e) = self.constellation_chan.send(msg) {
+                if let Err(e) = self.constellation_sender.send(msg) {
                     warn!("Sending ready to save to constellation failed ({:?}).", e);
                 }
                 self.ready_to_save_state = ReadyState::WaitingForConstellationReply;
@@ -1859,26 +1905,29 @@ impl IOCompositor {
     }
 
     /// Receive and handle compositor messages.
-    pub fn handle_messages(&mut self, windows: &mut HashMap<WindowId, (Window, DocumentId)>) {
+    pub fn handle_messages(
+        &mut self,
+        windows: &mut HashMap<WindowId, (Window, DocumentId)>,
+        mut messages: Vec<CompositorMsg>,
+    ) {
         // Check for new messages coming from the other threads in the system.
-        let mut compositor_messages = vec![];
         let mut found_recomposite_msg = false;
-        while let Ok(msg) = self.compositor_receiver.try_recv() {
-            match msg {
+        messages.retain(|message| {
+            match message {
                 CompositorMsg::NewWebRenderFrameReady(..) if found_recomposite_msg => {
                     // Only take one of duplicate NewWebRendeFrameReady messages, but do subtract
                     // one frame from the pending frames.
                     self.pending_frames -= 1;
+                    false
                 }
                 CompositorMsg::NewWebRenderFrameReady(..) => {
                     found_recomposite_msg = true;
-
-                    compositor_messages.push(msg)
+                    true
                 }
-                _ => compositor_messages.push(msg),
+                _ => true,
             }
-        }
-        for msg in compositor_messages {
+        });
+        for msg in messages {
             self.handle_browser_message(msg, windows);
 
             if self.shutdown_state == ShutdownState::FinishedShuttingDown {
@@ -1992,7 +2041,7 @@ impl IOCompositor {
                 PaintMetricState::Seen(epoch, first_reflow) if epoch <= current_epoch => {
                     assert!(epoch <= current_epoch);
                     if let Err(error) =
-                        self.constellation_chan
+                        self.constellation_sender
                             .send(EmbedderToConstellationMessage::PaintMetric(
                                 *pipeline_id,
                                 PaintMetricEvent::FirstPaint(paint_time, first_reflow),
@@ -2008,7 +2057,7 @@ impl IOCompositor {
             match pipeline.first_contentful_paint_metric {
                 PaintMetricState::Seen(epoch, first_reflow) if epoch <= current_epoch => {
                     if let Err(error) =
-                        self.constellation_chan
+                        self.constellation_sender
                             .send(EmbedderToConstellationMessage::PaintMetric(
                                 *pipeline_id,
                                 PaintMetricEvent::FirstContentfulPaint(paint_time, first_reflow),
@@ -2037,7 +2086,7 @@ impl IOCompositor {
         };
 
         if let Err(error) =
-            self.constellation_chan
+            self.constellation_sender
                 .send(EmbedderToConstellationMessage::RefreshCursor(
                     hit_test_result.pipeline_id,
                 ))
@@ -2083,5 +2132,79 @@ struct FrameTreeId(u32);
 impl FrameTreeId {
     pub fn next(&mut self) {
         self.0 += 1;
+    }
+}
+
+/// A struct that is reponsible for delaying frame requests until all new canvas images
+/// for a particular "update the rendering" call in the `ScriptThread` have been
+/// sent to WebRender.
+///
+/// These images may be updated in WebRender asynchronously in the canvas task. A frame
+/// is then requested if:
+///
+///  - The renderer has received a GenerateFrame message from a `ScriptThread`.
+///  - All pending image updates have finished and have been noted in the [`FrameDelayer`].
+#[derive(Default)]
+struct FrameDelayer {
+    /// The latest [`Epoch`] of canvas images that have been sent to WebRender. Note
+    /// that this only records the `Epoch`s for canvases and only ones that are involved
+    /// in "update the rendering".
+    image_epochs: HashMap<ImageKey, Epoch>,
+    /// A map of all pending canvas images
+    pending_canvas_images: HashMap<ImageKey, Epoch>,
+    /// Whether or not we have a pending frame.
+    pending_frame: bool,
+    /// A list of pipelines that should be notified when we are no longer waiting for
+    /// canvas images.
+    waiting_pipelines: HashSet<PipelineId>,
+}
+
+impl FrameDelayer {
+    fn delete_image(&mut self, image_key: ImageKey) {
+        self.image_epochs.remove(&image_key);
+        self.pending_canvas_images.remove(&image_key);
+    }
+
+    fn update_image(&mut self, image_key: ImageKey, epoch: Epoch) {
+        self.image_epochs.insert(image_key, epoch);
+        let Entry::Occupied(entry) = self.pending_canvas_images.entry(image_key) else {
+            return;
+        };
+        if *entry.get() <= epoch {
+            entry.remove();
+        }
+    }
+
+    fn add_delay(
+        &mut self,
+        pipeline_id: PipelineId,
+        canvas_epoch: Epoch,
+        image_keys: Vec<ImageKey>,
+    ) {
+        for image_key in image_keys.into_iter() {
+            // If we've already seen the necessary epoch for this image, do not
+            // start waiting for it.
+            if self
+                .image_epochs
+                .get(&image_key)
+                .is_some_and(|epoch_seen| *epoch_seen >= canvas_epoch)
+            {
+                continue;
+            }
+            self.pending_canvas_images.insert(image_key, canvas_epoch);
+        }
+        self.waiting_pipelines.insert(pipeline_id);
+    }
+
+    fn needs_new_frame(&self) -> bool {
+        self.pending_frame && self.pending_canvas_images.is_empty()
+    }
+
+    fn set_pending_frame(&mut self, value: bool) {
+        self.pending_frame = value;
+    }
+
+    fn take_waiting_pipelines(&mut self) -> Vec<PipelineId> {
+        self.waiting_pipelines.drain().collect()
     }
 }

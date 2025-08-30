@@ -1,4 +1,4 @@
-use base::id::WebViewId;
+use base::{generic_channel::GenericSender, id::WebViewId};
 use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::Sender;
 use embedder_traits::{
@@ -6,7 +6,6 @@ use embedder_traits::{
     ViewportDetails,
 };
 use euclid::Scale;
-use ipc_channel::ipc::IpcSender;
 use serde::{Deserialize, Serialize};
 use servo_url::ServoUrl;
 use webrender_api::units::DeviceRect;
@@ -42,15 +41,15 @@ enum PromptType {
 #[derive(Clone)]
 pub enum PromptSender {
     /// Alert sender
-    AlertSender(IpcSender<AlertResponse>),
+    AlertSender(GenericSender<AlertResponse>),
     /// Ok/Cancel, Yes/No sender
-    ConfirmSender(IpcSender<ConfirmResponse>),
+    ConfirmSender(GenericSender<ConfirmResponse>),
     /// Input sender
-    InputSender(IpcSender<PromptResponse>),
+    InputSender(GenericSender<PromptResponse>),
     /// Allow/Deny Permission sender
-    AllowDenySender(IpcSender<AllowOrDeny>),
+    AllowDenySender(GenericSender<AllowOrDeny>),
     /// HTTP basic authentication sender
-    HttpBasicAuthSender(IpcSender<Option<AuthenticationResponse>>),
+    HttpBasicAuthSender(GenericSender<Option<AuthenticationResponse>>),
 }
 
 /// Prompt input result send from prompt dialog to backend
@@ -144,7 +143,7 @@ impl PromptDialog {
         rect: DeviceRect,
         scale_factor: f32,
         message: String,
-        prompt_sender: IpcSender<AlertResponse>,
+        prompt_sender: GenericSender<AlertResponse>,
     ) {
         self.prompt_sender = Some(PromptSender::AlertSender(prompt_sender));
         self.show(sender, rect, scale_factor, PromptType::Alert(message));
@@ -168,7 +167,7 @@ impl PromptDialog {
         rect: DeviceRect,
         scale_factor: f32,
         message: String,
-        prompt_sender: IpcSender<ConfirmResponse>,
+        prompt_sender: GenericSender<ConfirmResponse>,
     ) {
         self.prompt_sender = Some(PromptSender::ConfirmSender(prompt_sender));
         self.show(sender, rect, scale_factor, PromptType::OkCancel(message));
@@ -219,7 +218,7 @@ impl PromptDialog {
         scale_factor: f32,
         message: String,
         default_value: Option<String>,
-        prompt_sender: IpcSender<PromptResponse>,
+        prompt_sender: GenericSender<PromptResponse>,
     ) {
         self.prompt_sender = Some(PromptSender::InputSender(prompt_sender));
         self.show(
@@ -250,7 +249,7 @@ impl PromptDialog {
         sender: &Sender<EmbedderToConstellationMessage>,
         rect: DeviceRect,
         scale_factor: f32,
-        prompt_sender: IpcSender<Option<AuthenticationResponse>>,
+        prompt_sender: GenericSender<Option<AuthenticationResponse>>,
     ) {
         self.prompt_sender = Some(PromptSender::HttpBasicAuthSender(prompt_sender));
         self.show(sender, rect, scale_factor, PromptType::HttpBasicAuth);

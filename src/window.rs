@@ -1,6 +1,6 @@
 use std::{cell::Cell, collections::HashMap};
 
-use base::id::WebViewId;
+use base::{generic_channel::GenericSender, id::WebViewId};
 use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::Sender;
 use embedder_traits::{
@@ -69,7 +69,7 @@ pub(crate) struct EventListeners {
     pub(crate) on_navigation_starting: bool,
     /// An id to request response sender map if the controller wants to get and handle web resource requests
     pub(crate) on_web_resource_requested:
-        Option<HashMap<uuid::Uuid, (url::Url, IpcSender<WebResourceResponseMsg>)>>,
+        Option<HashMap<uuid::Uuid, (url::Url, GenericSender<WebResourceResponseMsg>)>>,
     /// This is `true` if the controller wants to get and handle WindowEvent::CloseRequested
     pub(crate) on_close_requested: bool,
 }
@@ -334,14 +334,14 @@ impl Window {
                 let activate_next_tab = r#"if (nextTab) window.prompt(`ACTIVATE_TAB:${JSON.stringify({ id: nextTab })}`)"#;
 
                 javascript_evaluator.evaluate_ignore_result(
-                    &compositor.constellation_chan,
+                    &compositor.constellation_sender,
                     &panel.webview.webview_id,
                     format!("{cmd}{activate_next_tab}"),
                 );
             }
         }
         send_to_constellation(
-            &compositor.constellation_chan,
+            &compositor.constellation_sender,
             EmbedderToConstellationMessage::CloseWebView(tab_id),
         );
     }
@@ -369,16 +369,16 @@ impl Window {
             if self.tab_manager.activate_tab(tab_id).is_some() {
                 // throttle the old tab to avoid unnecessary animation caclulations
                 if let Some(old_tab_id) = old_tab_id {
-                    let _ = compositor.constellation_chan.send(
+                    let _ = compositor.constellation_sender.send(
                         EmbedderToConstellationMessage::SetWebViewThrottled(old_tab_id, true),
                     );
                 }
-                let _ = compositor.constellation_chan.send(
+                let _ = compositor.constellation_sender.send(
                     EmbedderToConstellationMessage::SetWebViewThrottled(tab_id, false),
                 );
 
                 self.focused_webview_id = Some(tab_id);
-                let _ = compositor.constellation_chan.send(
+                let _ = compositor.constellation_sender.send(
                     EmbedderToConstellationMessage::FocusWebView(tab_id, FocusId::new()),
                 );
 
@@ -387,7 +387,7 @@ impl Window {
                 let prev_btn_enabled = history.current_idx > 0;
                 let next_btn_enabled = history.current_idx < history.list.len() - 1;
                 javascript_evaluator.evaluate_ignore_result(
-                    &compositor.constellation_chan,
+                    &compositor.constellation_sender,
                     &self.panel.as_ref().unwrap().webview.webview_id,
                     format!(
                         "window.navbar.setNavBtnEnabled({}, {})",
@@ -735,7 +735,7 @@ impl Window {
             match (event.modifiers, event.code) {
                 (modifiers, Code::KeyT) if modifiers == control_or_meta => {
                     (*self).create_tab(
-                        &compositor.constellation_chan,
+                        &compositor.constellation_sender,
                         ServoUrl::parse("https://example.com").unwrap(),
                         javascript_evaluator,
                     );
@@ -953,7 +953,7 @@ impl Window {
             let tab_ids = self.tab_manager.tab_ids();
             for tab_id in tab_ids {
                 send_to_constellation(
-                    &compositor.constellation_chan,
+                    &compositor.constellation_sender,
                     EmbedderToConstellationMessage::CloseWebView(tab_id),
                 );
             }
