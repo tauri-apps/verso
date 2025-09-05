@@ -6,7 +6,7 @@ use std::{
 
 use arboard::Clipboard;
 use base::{
-    generic_channel::RoutedReceiver,
+    generic_channel::{GenericCallback, RoutedReceiver},
     id::{PipelineNamespace, PipelineNamespaceId, WebViewId},
 };
 use bluetooth::BluetoothThreadFactory;
@@ -225,6 +225,8 @@ impl Verso {
         let bluetooth_thread: IpcSender<BluetoothRequest> =
             BluetoothThreadFactory::new(embedder_proxy.clone());
 
+        let privileged_urls = protocols.privileged_urls();
+
         // Create resource thread pool
         let (public_resource_threads, private_resource_threads, async_runtime) =
             resource_thread::new_resource_threads(
@@ -271,6 +273,7 @@ impl Verso {
             webrender_external_images: external_images,
             user_content_manager,
             async_runtime,
+            privileged_urls,
         };
 
         // Create constellation thread
@@ -1169,23 +1172,25 @@ fn create_compositor_channel(
 ) -> (CompositorProxy, RoutedReceiver<CompositorMsg>) {
     let (sender, receiver) = unbounded();
 
-    let (compositor_ipc_sender, compositor_ipc_receiver) =
-        ipc::channel().expect("ipc channel failure");
+    let sender_clone = sender.clone();
+    let event_loop_waker_clone = event_loop_waker.clone();
+    // This callback is equivalent to `CompositorProxy::send`
+    let result_callback = move |msg: Result<CompositorMsg, ipc_channel::Error>| {
+        if let Err(err) = sender_clone.send(msg) {
+            log::warn!("Failed to send response ({:?}).", err);
+        }
+        event_loop_waker_clone.wake();
+    };
 
-    let cross_process_compositor_api = CrossProcessCompositorApi::new(compositor_ipc_sender);
+    let generic_callback =
+        GenericCallback::new(result_callback).expect("Failed to create callback");
+    let cross_process_compositor_api = CrossProcessCompositorApi::new(generic_callback);
+
     let compositor_proxy = CompositorProxy {
         sender,
         cross_process_compositor_api,
         event_loop_waker,
     };
-
-    let compositor_proxy_clone = compositor_proxy.clone();
-    ROUTER.add_typed_route(
-        compositor_ipc_receiver,
-        Box::new(move |message| {
-            compositor_proxy_clone.route_msg(message);
-        }),
-    );
 
     (compositor_proxy, receiver)
 }
