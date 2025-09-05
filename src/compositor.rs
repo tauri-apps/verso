@@ -26,6 +26,7 @@ use embedder_traits::{
     MouseButtonEvent, MouseMoveEvent, TouchEvent, TouchEventType, TouchId, ViewportDetails,
 };
 use euclid::{Point2D, Scale, Size2D, Transform3D, Vector2D, vec2};
+use fnv::FnvHashMap;
 use gleam::gl;
 use ipc_channel::ipc::{self, IpcSharedMemory};
 use log::{debug, trace, warn};
@@ -1785,7 +1786,7 @@ impl IOCompositor {
                 // complete (i.e. has *all* layers painted to the requested epoch).
                 // This gets sent to the constellation for comparison with the current
                 // frame tree.
-                let mut pipeline_epochs = HashMap::new();
+                let mut pipeline_epochs = FnvHashMap::default();
                 for id in self.pipeline_details.keys() {
                     if let Some(WebRenderEpoch(epoch)) = self
                         .webrender
