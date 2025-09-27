@@ -4,7 +4,7 @@ use base::{generic_channel::GenericSender, id::WebViewId};
 use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::Sender;
 use embedder_traits::{
-    AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg, FocusId, ImeEvent,
+    AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg,  ImeEvent,
     InputEvent, MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
     MouseMoveEvent, Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails,
     WebResourceResponseMsg, WheelMode,
@@ -379,7 +379,7 @@ impl Window {
 
                 self.focused_webview_id = Some(tab_id);
                 let _ = compositor.constellation_sender.send(
-                    EmbedderToConstellationMessage::FocusWebView(tab_id, FocusId::new()),
+                    EmbedderToConstellationMessage::FocusWebView(tab_id),
                 );
 
                 // Set navigation button enabled state

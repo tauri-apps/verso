@@ -3,8 +3,8 @@ use base::id::WebViewId;
 use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 use crossbeam_channel::Sender;
 use embedder_traits::{
-    AlertResponse, AllowOrDeny, ConfirmResponse, ContextMenuResult, EmbedderMsg, FocusId,
-    LoadStatus, PromptResponse, SimpleDialog, TraversalId, ViewportDetails,
+    AlertResponse, AllowOrDeny, ConfirmResponse, ContextMenuResult, EmbedderMsg, LoadStatus,
+    PromptResponse, SimpleDialog, TraversalId, ViewportDetails,
 };
 use euclid::Scale;
 use ipc_channel::ipc;
@@ -113,7 +113,7 @@ impl Window {
                     self.window.request_redraw();
                     send_to_constellation(
                         sender,
-                        EmbedderToConstellationMessage::FocusWebView(webview_id, FocusId::new()),
+                        EmbedderToConstellationMessage::FocusWebView(webview_id),
                     );
                 }
             },
@@ -451,7 +451,7 @@ impl Window {
                     self.window.request_redraw();
                     send_to_constellation(
                         sender,
-                        EmbedderToConstellationMessage::FocusWebView(panel_id, FocusId::new()),
+                        EmbedderToConstellationMessage::FocusWebView(panel_id),
                     );
 
                     self.create_tab(
