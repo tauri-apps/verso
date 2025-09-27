@@ -258,8 +258,36 @@ impl VersoviewController {
         Ok(())
     }
 
-    /// Listen on web resource requests,
-    /// return a boolean in the callback to decide whether or not allowing this navigation
+    /// Listen on web resource requests and maybe intercept them,
+    /// the closure takes 2 parameters, a request and a response function,
+    /// the response function takes an optional response,
+    /// which you can return `Some(response)` to intercept the request with a custom respond,
+    /// or returning a `None` to use the default handlings
+    ///
+    /// Notes:
+    ///
+    /// - You must respond to the request or else the request will never complete
+    /// - Data URL requests are not sent to the controller
+    ///
+    /// ## Examples
+    ///
+    /// ```
+    /// let controller = verso::VersoBuilder::new()
+    ///     .build("versoview", url::Url::parse("https://example.com/").unwrap());
+    /// controller
+    ///     .on_web_resource_requested(|request, response| {
+    ///         if request.uri() == "https://example.com/" {
+    ///             response(Some(
+    ///                 http::Response::builder()
+    ///                     .body("Intercepted!".as_bytes().to_vec())
+    ///                     .unwrap(),
+    ///             ));
+    ///         } else {
+    ///             response(None);
+    ///         }
+    ///     })
+    ///     .unwrap();
+    /// ```
     pub fn on_web_resource_requested(
         &self,
         callback: impl Fn(http::Request<Vec<u8>>, ResponseFunction) + Send + 'static,

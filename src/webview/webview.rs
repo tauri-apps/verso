@@ -174,12 +174,25 @@ impl Window {
                         for (key, value) in request.headers.iter() {
                             builder = builder.header(key, value);
                         }
+                        // TODO: Actually send the body
+                        let http_request = match builder.body(Vec::new()) {
+                            Ok(request) => request,
+                            Err(error) => {
+                                if request.url.scheme() == "data" {
+                                    log::debug!(
+                                        "We currently skip data URLs as they can't be parsed into a `http::Uri`: {error}"
+                                    );
+                                } else {
+                                    log::error!("Failed to construct a request: {error}");
+                                }
+                                return;
+                            }
+                        };
                         match to_controller_sender.send(
                             ToControllerMessage::OnWebResourceRequested(
                                 versoview_messages::WebResourceRequest {
                                     id,
-                                    // TODO: Actually send the body
-                                    request: builder.body(Vec::new()).unwrap(),
+                                    request: http_request,
                                 },
                             ),
                         ) {
@@ -202,26 +215,21 @@ impl Window {
                     .map(|c| {
                         c.get_text().unwrap_or_else(|e| {
                             log::warn!(
-                                "Verso WebView {webview_id:?} failed to get clipboard text: {}",
-                                e
+                                "Verso WebView {webview_id:?} failed to get clipboard text: {e}",
                             );
                             String::new()
                         })
                     })
                     .unwrap_or_default();
                 if let Err(e) = sender.send(Ok(text)) {
-                    log::warn!(
-                        "Verso WebView {webview_id:?} failed to send clipboard text: {}",
-                        e
-                    );
+                    log::warn!("Verso WebView {webview_id:?} failed to send clipboard text: {e}",);
                 }
             }
             EmbedderMsg::SetClipboardText(_webview_id, text) => {
                 if let Some(c) = clipboard {
                     if let Err(e) = c.set_text(text) {
                         log::warn!(
-                            "Verso WebView {webview_id:?} failed to set clipboard text: {}",
-                            e
+                            "Verso WebView {webview_id:?} failed to set clipboard text: {e}",
                         );
                     }
                 }
