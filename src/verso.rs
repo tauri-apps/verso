@@ -148,8 +148,9 @@ impl Verso {
 
         // Create Webrender threads
         let (mut webrender, webrender_api_sender) = {
-            let mut debug_flags = DebugFlags::empty();
-            debug_flags.set(DebugFlags::PROFILER_DBG, opts.debug.webrender_stats);
+            let debug_flags = DebugFlags::empty();
+            // TODO: Add a way to set this
+            // debug_flags.set(DebugFlags::PROFILER_DBG, opts.debug.webrender_stats);
 
             let render_notifier = Box::new(RenderNotifier::new(compositor_proxy.clone()));
             let clear_color = ColorF::new(0., 0., 0., 0.);
@@ -330,7 +331,6 @@ impl Verso {
                 webrender_gl,
             },
             opts.wait_for_stable_image,
-            opts.debug.convert_mouse_to_touch,
         );
 
         if let Some(zoom_level) = zoom_level {

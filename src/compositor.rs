@@ -23,16 +23,16 @@ use crossbeam_channel::Sender;
 use dpi::PhysicalSize;
 use embedder_traits::{
     AnimationState, CompositorHitTestResult, InputEvent, MouseButton, MouseButtonAction,
-    MouseButtonEvent, MouseMoveEvent, TouchEvent, TouchEventType, TouchId, ViewportDetails,
+    MouseButtonEvent, MouseMoveEvent, TouchEvent, TouchEventType, ViewportDetails,
 };
 use euclid::{Point2D, Scale, Size2D, Transform3D, Vector2D, vec2};
-use fnv::FnvHashMap;
 use gleam::gl;
 use ipc_channel::ipc::{self, IpcSharedMemory};
 use log::{debug, trace, warn};
 use profile_traits::mem::{ProcessReports, Report, ReportKind};
 use profile_traits::time::{self as profile_time, ProfilerCategory};
 use profile_traits::{mem, path, time, time_profile};
+use rustc_hash::FxHashMap;
 use servo_config::pref;
 use servo_geometry::DeviceIndependentPixel;
 use style_traits::CSSPixel;
@@ -172,9 +172,6 @@ pub struct IOCompositor {
 
     /// True to exit after page load ('-x').
     wait_for_stable_image: bool,
-
-    /// True to translate mouse input into touch events.
-    convert_mouse_to_touch: bool,
 
     /// The number of frames pending to receive from WebRender.
     pending_frames: usize,
@@ -330,7 +327,6 @@ impl IOCompositor {
         scale_factor: Scale<f32, DeviceIndependentPixel, DevicePixel>,
         state: InitialCompositorState,
         wait_for_stable_image: bool,
-        convert_mouse_to_touch: bool,
     ) -> Self {
         let compositor = IOCompositor {
             current_window,
@@ -355,7 +351,6 @@ impl IOCompositor {
             last_mouse_move_position: None,
             frame_delayer: FrameDelayer::default(),
             wait_for_stable_image,
-            convert_mouse_to_touch,
             pending_frames: 0,
             last_animation_tick: Instant::now(),
             is_animating: false,
@@ -1329,33 +1324,6 @@ impl IOCompositor {
             self.on_touch_event(webview_id, event);
             return;
         }
-
-        if self.convert_mouse_to_touch {
-            match event {
-                InputEvent::MouseButton(event) => {
-                    match event.action {
-                        MouseButtonAction::Click => {}
-                        MouseButtonAction::Down => self.on_touch_down(
-                            webview_id,
-                            TouchEvent::new(TouchEventType::Down, TouchId(0), event.point),
-                        ),
-                        MouseButtonAction::Up => self.on_touch_up(
-                            webview_id,
-                            TouchEvent::new(TouchEventType::Up, TouchId(0), event.point),
-                        ),
-                    }
-                    return;
-                }
-                InputEvent::MouseMove(event) => {
-                    self.on_touch_move(
-                        webview_id,
-                        TouchEvent::new(TouchEventType::Move, TouchId(0), event.point),
-                    );
-                    return;
-                }
-                _ => {}
-            }
-        }
         self.dispatch_input_event_with_hit_testing(webview_id, event);
     }
 
@@ -1638,7 +1606,7 @@ impl IOCompositor {
                 != Some(&hit_test_result.pipeline_id)
             {
                 let scroll_result = pipeline_details.scroll_tree.scroll_node_or_ancestor(
-                    &hit_test_result.external_scroll_id,
+                    hit_test_result.external_scroll_id,
                     scroll_location,
                     ScrollType::InputEvents,
                 );
@@ -1786,7 +1754,7 @@ impl IOCompositor {
                 // complete (i.e. has *all* layers painted to the requested epoch).
                 // This gets sent to the constellation for comparison with the current
                 // frame tree.
-                let mut pipeline_epochs = FnvHashMap::default();
+                let mut pipeline_epochs = FxHashMap::default();
                 for id in self.pipeline_details.keys() {
                     if let Some(WebRenderEpoch(epoch)) = self
                         .webrender
