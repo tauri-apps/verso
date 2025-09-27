@@ -264,7 +264,10 @@ impl VersoviewController {
     /// which you can return `Some(response)` to intercept the request with a custom respond,
     /// or returning a `None` to use the default handlings
     ///
-    /// Note: you must respond to the request or else the request will never complete
+    /// Notes:
+    ///
+    /// - You must respond to the request or else the request will never complete
+    /// - Data URL requests are not sent to the controller
     ///
     /// ## Examples
     ///
