@@ -11,7 +11,10 @@ pub mod compositor;
 pub mod config;
 /// Error and result types.
 pub mod errors;
+
 mod javascript_evaluator;
+mod screenshot;
+
 /// Utilities to handle keyboard inputs and states.
 pub mod keyboard;
 /// Verso's rendering context.
