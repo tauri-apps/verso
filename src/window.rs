@@ -25,6 +25,7 @@ use muda::{MenuEvent, MenuEventReceiver};
 use notify_rust::Image;
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
+use servo::{Servo, WebViewBuilder};
 use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
 use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
@@ -47,8 +48,6 @@ use winit::{
 
 use crate::{
     bookmark::BookmarkManager,
-    compositor::IOCompositor,
-    javascript_evaluator::JavaScriptEvaluator,
     keyboard::keyboard_event_from_winit,
     rendering::{RenderingContext, gl_config_picker},
     tab::TabManager,
@@ -242,11 +241,7 @@ impl Window {
     }
 
     /// Send the constellation message to start Panel UI
-    pub fn create_panel(
-        &mut self,
-        constellation_sender: &Sender<EmbedderToConstellationMessage>,
-        initial_url: url::Url,
-    ) {
+    pub fn create_panel(&mut self, servo: &Servo, initial_url: url::Url) {
         let hidpi_scale_factor = Scale::new(self.scale_factor() as f32);
         let size = self.window.inner_size();
         let size = Size2D::new(size.width as f32, size.height as f32);
@@ -256,27 +251,20 @@ impl Window {
             hidpi_scale_factor,
         };
 
-        let panel_id = WebViewId::new();
-        self.panel = Some(Panel {
-            webview: WebView::new(panel_id, viewport_details),
-            initial_url: ServoUrl::from_url(initial_url),
-        });
-
         let url = ServoUrl::parse("verso://resources/components/panel.html").unwrap();
 
-        send_to_constellation(
-            constellation_sender,
-            EmbedderToConstellationMessage::NewWebView(url, panel_id, viewport_details),
-        );
+        let webview = WebViewBuilder::new(servo)
+            .url(url)
+            .hidpi_scale_factor(hidpi_scale_factor)
+            .build();
+        self.panel = Some(Panel {
+            webview,
+            initial_url: ServoUrl::from_url(initial_url),
+        });
     }
 
     /// Create a new webview and send the constellation message to load the initial URL
-    pub fn create_tab(
-        &mut self,
-        constellation_sender: &Sender<EmbedderToConstellationMessage>,
-        initial_url: ServoUrl,
-        javascript_evaluator: &mut JavaScriptEvaluator,
-    ) {
+    pub fn create_tab(&mut self, servo: &Servo, initial_url: ServoUrl) {
         let webview_id = WebViewId::new();
         let size = self.size().to_f32();
         let rect = DeviceRect::from_size(size);
@@ -291,39 +279,28 @@ impl Window {
             hidpi_scale_factor,
         };
 
-        let mut webview = WebView::new(webview_id, viewport_details);
-        webview.set_size(content_size);
+        let webview = WebViewBuilder::new(servo)
+            .url(initial_url)
+            .hidpi_scale_factor(hidpi_scale_factor)
+            .size(content_size)
+            .build();
 
         if let Some(panel) = &self.panel {
             let cmd: String = format!(
                 "window.navbar.addTab('{}', {})",
-                serde_json::to_string(&webview.webview_id).unwrap(),
+                serde_json::to_string(&webview.id()).unwrap(),
                 true,
             );
-
-            javascript_evaluator.evaluate_ignore_result(
-                constellation_sender,
-                &panel.webview.webview_id,
-                cmd,
-            );
+            webview.evaluate_javascript(cmd, |_| {});
         }
 
         self.tab_manager.append_tab(webview, true);
 
-        send_to_constellation(
-            constellation_sender,
-            EmbedderToConstellationMessage::NewWebView(initial_url, webview_id, viewport_details),
-        );
         log::debug!("Verso Window {:?} adds webview {}", self.id(), webview_id);
     }
 
     /// Close a tab
-    pub fn close_tab(
-        &mut self,
-        compositor: &mut IOCompositor,
-        tab_id: WebViewId,
-        javascript_evaluator: &mut JavaScriptEvaluator,
-    ) {
+    pub fn close_tab(&mut self, tab_id: WebViewId) {
         // if there are more than 2 tabs, we need to ask for the new active tab after tab is closed
         if self.tab_manager.count() > 1 {
             if let Some(panel) = &self.panel {
@@ -333,11 +310,9 @@ impl Window {
                 );
                 let activate_next_tab = r#"if (nextTab) window.prompt(`ACTIVATE_TAB:${JSON.stringify({ id: nextTab })}`)"#;
 
-                javascript_evaluator.evaluate_ignore_result(
-                    &compositor.constellation_sender,
-                    &panel.webview.webview_id,
-                    format!("{cmd}{activate_next_tab}"),
-                );
+                panel
+                    .webview
+                    .evaluate_javascript(format!("{cmd}{activate_next_tab}"), |_| {});
             }
         }
         send_to_constellation(
@@ -349,10 +324,8 @@ impl Window {
     /// Activate a tab
     pub fn activate_tab(
         &mut self,
-        compositor: &mut IOCompositor,
         tab_id: WebViewId,
         show_tab: bool,
-        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         let size = self.size().to_f32();
         let rect = DeviceRect::from_size(size);
@@ -405,9 +378,7 @@ impl Window {
     pub fn handle_winit_window_event(
         &mut self,
         sender: &Sender<EmbedderToConstellationMessage>,
-        compositor: &mut IOCompositor,
         event: &winit::event::WindowEvent,
-        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         match event {
             WindowEvent::RedrawRequested => {
@@ -691,7 +662,7 @@ impl Window {
                 log::trace!("Verso is handling {:?}", event);
 
                 /* Window operation keyboard shortcut */
-                if self.handle_keyboard_shortcut(compositor, &event.event, javascript_evaluator) {
+                if self.handle_keyboard_shortcut(compositor, &event.event) {
                     return;
                 }
                 forward_input_event(compositor, webview_id, sender, InputEvent::Keyboard(event));
@@ -717,12 +688,7 @@ impl Window {
     /// Handle Window keyboard shortcut
     ///
     /// - Returns `true` if the event is handled, then we should skip sending it to constellation
-    fn handle_keyboard_shortcut(
-        &mut self,
-        compositor: &mut IOCompositor,
-        event: &KeyboardEvent,
-        javascript_evaluator: &mut JavaScriptEvaluator,
-    ) -> bool {
+    fn handle_keyboard_shortcut(&mut self, event: &KeyboardEvent) -> bool {
         let is_macos = cfg!(target_os = "macos");
         let control_or_meta = if is_macos {
             Modifiers::META
@@ -737,13 +703,12 @@ impl Window {
                     (*self).create_tab(
                         &compositor.constellation_sender,
                         ServoUrl::parse("https://example.com").unwrap(),
-                        javascript_evaluator,
                     );
                     return true;
                 }
                 (modifiers, Code::KeyW) if modifiers == control_or_meta => {
                     if let Some(tab_id) = self.tab_manager.current_tab_id() {
-                        (*self).close_tab(compositor, tab_id, javascript_evaluator);
+                        (*self).close_tab(compositor, tab_id);
                     }
                     return true;
                 }
@@ -762,9 +727,7 @@ impl Window {
         sender: &Sender<EmbedderToConstellationMessage>,
         to_controller_sender: &Option<IpcSender<ToControllerMessage>>,
         clipboard: Option<&mut Clipboard>,
-        compositor: &mut IOCompositor,
         bookmark_manager: &mut BookmarkManager,
-        javascript_evaluator: &mut JavaScriptEvaluator,
     ) -> bool {
         match message {
             EmbedderMsg::SetCursor(_, cursor) => {
@@ -836,7 +799,6 @@ impl Window {
                     clipboard,
                     compositor,
                     bookmark_manager,
-                    javascript_evaluator,
                 );
             }
         }
@@ -863,7 +825,6 @@ impl Window {
             to_controller_sender,
             clipboard,
             compositor,
-            javascript_evaluator,
         );
         false
     }
@@ -1307,7 +1268,6 @@ pub unsafe fn decorate_window(view: *mut AnyObject, _position: LogicalPosition<f
 
 /// Forward input event to compositor or constellation.
 fn forward_input_event(
-    compositor: &mut IOCompositor,
     webview_id: WebViewId,
     constellation_proxy: &Sender<EmbedderToConstellationMessage>,
     event: InputEvent,

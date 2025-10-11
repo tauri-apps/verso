@@ -428,7 +428,7 @@ impl Config {
     }
 
     /// Init options and preferences.
-    pub fn init(&self) {
+    pub fn init(&self) -> (Opts, Preferences) {
         // Set the resource files of Servo.
         resources::set(Box::new(ResourceReader(self.resource_dir.clone())));
 
@@ -440,7 +440,7 @@ impl Config {
         }
 
         // Set the global options of Servo.
-        initialize_options(opts);
+        // initialize_options(opts);
 
         let (devtools_server_enabled, devtools_port) =
             if let Some(devtools_port) = self.devtools_port {
@@ -450,13 +450,17 @@ impl Config {
             };
 
         // Set the preferences of Servo.
-        servo_config::prefs::set(Preferences {
+        // servo_config::prefs::set(
+        let preference = Preferences {
             devtools_server_enabled,
             devtools_server_port: devtools_port as i64,
             dom_notification_enabled: true, // experimental feature
             user_agent: self.user_agent.clone(),
             ..Default::default()
-        });
+        };
+        // );
+
+        (opts, preference)
     }
 }
 

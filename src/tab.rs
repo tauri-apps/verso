@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 
-use crate::webview::{WebView, prompt::PromptDialog};
+use crate::webview::prompt::PromptDialog;
 use base::id::WebViewId;
 use serde::{Deserialize, Serialize};
+use servo::WebView;
 use servo_url::ServoUrl;
 use webrender_api::units::DeviceRect;
 
 /// Tab state
 pub struct Tab {
-    /// Tab WebView id
-    id: WebViewId,
     /// Tab WebView
     webview: WebView,
     /// History
@@ -24,7 +23,6 @@ impl Tab {
     /// Create a new tab state.
     pub fn new(webview: WebView) -> Self {
         Self {
-            id: webview.webview_id,
             webview,
             history: TabHistory {
                 list: Vec::new(),
@@ -37,7 +35,7 @@ impl Tab {
 
     /// Get tab WebView id.
     pub fn id(&self) -> WebViewId {
-        self.id
+        self.webview().id()
     }
 
     /// Get tab WebView.

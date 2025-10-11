@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fmt::Debug,
+    rc::Rc,
     sync::{Arc, atomic::Ordering},
 };
 
@@ -9,8 +10,6 @@ use base::{
     generic_channel::{GenericCallback, RoutedReceiver},
     id::{PipelineNamespace, PipelineNamespaceId, WebViewId},
 };
-use bluetooth::BluetoothThreadFactory;
-use bluetooth_traits::BluetoothRequest;
 use compositing_traits::{
     CompositorMsg, CompositorProxy, CrossProcessCompositorApi, WebrenderExternalImageHandlers,
     WebrenderImageHandlerType,
@@ -18,7 +17,6 @@ use compositing_traits::{
 use constellation::{Constellation, FromEmbedderLogger, InitialConstellationState};
 use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use devtools;
 use embedder_traits::{
     AllowOrDeny, EmbedderMsg, EmbedderProxy, EventLoopWaker, WebDriverCommandMsg,
     WebResourceResponse, WebResourceResponseMsg, user_content_manager::UserContentManager,
@@ -27,17 +25,13 @@ use euclid::Scale;
 use fonts::SystemFontService;
 use ipc_channel::ipc::{self, IpcSender};
 use ipc_channel::router::ROUTER;
-use layout;
 use log::{Log, Metadata, Record};
 use net::resource_thread;
-use profile;
 use script::{self, JSEngineSetup};
+use servo::{AllowOrDenyRequest, Servo, ServoBuilder, ServoDelegate, ServoError};
 use servo_config::{opts, pref};
 use servo_url::ServoUrl;
-use style;
 use versoview_messages::{PositionType, SizeType, ToControllerMessage, ToVersoMessage};
-use webgpu;
-use webrender::{ShaderPrecacheFlags, WebRenderOptions, create_webrender_instance};
 use webrender_api::*;
 use winit::{
     event::WindowEvent,
@@ -47,29 +41,35 @@ use winit::{
 
 use crate::{
     bookmark::BookmarkManager,
-    compositor::{IOCompositor, InitialCompositorState, ShutdownState},
     config::{Config, parse_cli_args, to_winit_theme, to_winit_window_level},
-    javascript_evaluator::JavaScriptEvaluator,
     window::Window,
 };
 
 /// Main entry point of Verso browser.
 pub struct Verso {
-    windows: HashMap<WindowId, (Window, DocumentId)>,
-    compositor: Option<IOCompositor>,
-    constellation_sender: Sender<EmbedderToConstellationMessage>,
+    servo: Servo,
+    windows: HashMap<WindowId, Window>,
     to_controller_sender: Option<IpcSender<ToControllerMessage>>,
-    embedder_receiver: Receiver<EmbedderMsg>,
-    webdriver_receiver: Option<Receiver<WebDriverCommandMsg>>,
-    /// For single-process Servo instances, this field controls the initialization
-    /// and deinitialization of the JS Engine. Multiprocess Servo instances have their
-    /// own instance that exists in the content process instead.
-    _js_engine_setup: Option<JSEngineSetup>,
-    /// FIXME: It's None on wayland in Flatpak. Find a way to support this.
-    clipboard: Option<Clipboard>,
+    // embedder_receiver: Receiver<EmbedderMsg>,
+    // webdriver_receiver: Option<Receiver<WebDriverCommandMsg>>,
     config: Config,
     bookmark_manager: BookmarkManager,
-    javascript_evaluator: JavaScriptEvaluator,
+    // servo_delegate: VersoServoDelegate,
+}
+
+struct VersoServoDelegate;
+impl ServoDelegate for VersoServoDelegate {
+    fn notify_devtools_server_started(&self, _servo: &Servo, port: u16, _token: String) {
+        log::info!("Devtools Server running on port {port}");
+    }
+
+    fn request_devtools_connection(&self, _servo: &Servo, request: AllowOrDenyRequest) {
+        request.allow();
+    }
+
+    fn notify_error(&self, _servo: &Servo, error: ServoError) {
+        log::error!("Saw Servo error: {error:?}!");
+    }
 }
 
 impl Verso {
@@ -100,274 +100,45 @@ impl Verso {
         let user_scripts = config.user_scripts.clone();
         let zoom_level = config.zoom_level;
 
-        config.init();
-        // Reserving a namespace to create WebViewId.
-        PipelineNamespace::install(PipelineNamespaceId(0));
         let (mut window, rendering_context) = Window::new(evl, window_settings);
         let event_loop_waker = Box::new(Waker(proxy));
-        let opts = opts::get();
 
-        // Set Stylo flags
-        style::context::DEFAULT_DISABLE_STYLE_SHARING_CACHE
-            .store(opts.debug.disable_share_style_cache, Ordering::Relaxed);
-        style::context::DEFAULT_DUMP_STYLE_STATISTICS
-            .store(opts.debug.dump_style_statistics, Ordering::Relaxed);
-        style::traversal::IS_SERVO_NONINCREMENTAL_LAYOUT
-            .store(opts.nonincremental_layout, Ordering::Relaxed);
-
-        // Initialize servo media with dummy backend
-        // This will create a thread to initialize a global static of servo media.
-        // The thread will be closed once the static is initialized.
-        // TODO: This is used by content process. Spawn it there once if we have multiprocess mode.
-        servo_media::ServoMedia::init::<servo_media_dummy::DummyBackend>();
-
-        // Get GL bindings
-        let webrender_gl = rendering_context.gl.clone();
-
-        // Create profiler threads
-        let time_profiler_sender = profile::time::Profiler::create(
-            &opts.time_profiling,
-            opts.time_profiler_trace_path.clone(),
-        );
-        let mem_profiler_sender = profile::mem::Profiler::create();
-
-        // Create compositor and embedder channels
-        let (compositor_proxy, compositor_receiver) =
-            create_compositor_channel(event_loop_waker.clone());
-        let (embedder_proxy, embedder_receiver) = create_embedder_channel(event_loop_waker.clone());
-
-        // Create dev tools thread
-        let devtools_sender = if pref!(devtools_server_enabled) {
-            Some(devtools::start_server(
-                pref!(devtools_server_port) as u16,
-                embedder_proxy.clone(),
-            ))
-        } else {
-            None
-        };
-
-        // Create Webrender threads
-        let (mut webrender, webrender_api_sender) = {
-            let debug_flags = DebugFlags::empty();
-            // TODO: Add a way to set this
-            // debug_flags.set(DebugFlags::PROFILER_DBG, opts.debug.webrender_stats);
-
-            let render_notifier = Box::new(RenderNotifier::new(compositor_proxy.clone()));
-            let clear_color = ColorF::new(0., 0., 0., 0.);
-            create_webrender_instance(
-                webrender_gl.clone(),
-                render_notifier,
-                WebRenderOptions {
-                    // We force the use of optimized shaders here because rendering is broken
-                    // on Android emulators with unoptimized shaders. This is due to a known
-                    // issue in the emulator's OpenGL emulation layer.
-                    // See: https://github.com/servo/servo/issues/31726
-                    use_optimized_shaders: true,
-                    resource_override_path: opts.shaders_dir.clone(),
-                    debug_flags,
-                    precache_flags: if pref!(gfx_precache_shaders) {
-                        ShaderPrecacheFlags::FULL_COMPILE
-                    } else {
-                        ShaderPrecacheFlags::empty()
-                    },
-                    enable_aa: pref!(gfx_text_antialiasing_enabled),
-                    enable_subpixel_aa: pref!(gfx_subpixel_text_antialiasing_enabled),
-                    allow_texture_swizzling: pref!(gfx_texture_swizzling_enabled),
-                    clear_color,
-                    ..Default::default()
-                },
-                None,
-            )
-            .expect("Unable to initialize webrender!")
-        };
-        let webrender_api = webrender_api_sender.create_api();
-        let webrender_document = webrender_api
-            .add_document_with_id(window.size().to_i32(), u64::from(window.id()) as u32);
-
-        // Initialize js engine if it's single process mode
-        let js_engine_setup = if !opts.multiprocess {
-            Some(script::init())
-        } else {
-            None
-        };
-
-        let (external_image_handlers, external_images) = WebrenderExternalImageHandlers::new();
-        let mut external_image_handlers = Box::new(external_image_handlers);
-        // Create the webgl thread
-        // TODO: create webGL thread based on pref
-        // let gl_type = match webrender_gl.get_type() {
-        //     gl::GlType::Gl => sparkle::gl::GlType::Gl,
-        //     gl::GlType::Gles => sparkle::gl::GlType::Gles,
-        // };
-        // let WebGLComm {
-        //     webgl_threads,
-        //     webxr_layer_grand_manager,
-        //     image_handler,
-        // } = WebGLComm::new(
-        //     rendering_context.clone(),
-        //     webrender_api.create_sender(),
-        //     webrender_document,
-        //     external_images.clone(),
-        //     gl_type,
-        // );
-        // Set webrender external image handler for WebGL textures
-        // external_image_handlers.set_handler(image_handler, WebrenderImageHandlerType::WebGL);
-
-        // Set webrender external image handler for WebGPU textures
-        let wgpu_image_handler = webgpu::WGPUExternalImages::default();
-        external_image_handlers.set_handler(
-            Box::new(wgpu_image_handler),
-            WebrenderImageHandlerType::WebGPU,
-        );
-
-        webrender.set_external_image_handler(external_image_handlers);
-
-        // Create bluetooth thread
-        let bluetooth_thread: IpcSender<BluetoothRequest> =
-            BluetoothThreadFactory::new(embedder_proxy.clone());
-
-        let privileged_urls = protocols.privileged_urls();
-
-        // Create resource thread pool
-        let (public_resource_threads, private_resource_threads, async_runtime) =
-            resource_thread::new_resource_threads(
-                devtools_sender.clone(),
-                time_profiler_sender.clone(),
-                mem_profiler_sender.clone(),
-                embedder_proxy.clone(),
-                opts.config_dir.clone(),
-                opts.certificate_path.clone(),
-                opts.ignore_certificate_errors,
-                Arc::new(protocols),
-            );
-
-        // Create font cache thread
-        let system_font_service = Arc::new(
-            SystemFontService::spawn(
-                compositor_proxy.cross_process_compositor_api.clone(),
-                mem_profiler_sender.clone(),
-            )
-            .to_proxy(),
-        );
-
+        let (opts, preferences) = config.init();
         let mut user_content_manager = UserContentManager::new();
         for script in user_scripts {
             user_content_manager.add_script(script);
         }
 
-        // Create layout factory
-        let layout_factory = Arc::new(layout::LayoutFactoryImpl());
-        let initial_state = InitialConstellationState {
-            compositor_proxy: compositor_proxy.clone(),
-            embedder_proxy,
-            devtools_sender,
-            bluetooth_thread,
-            system_font_service,
-            public_resource_threads,
-            private_resource_threads,
-            time_profiler_chan: time_profiler_sender.clone(),
-            mem_profiler_chan: mem_profiler_sender.clone(),
-            webrender_document,
-            webrender_api_sender,
-            webxr_registry: None,
-            webgl_threads: None,
-            webrender_external_images: external_images,
-            user_content_manager,
-            async_runtime,
-            privileged_urls,
-        };
-
-        // Create constellation thread
-        let constellation_sender =
-            Constellation::<script::ScriptThread, script::ServiceWorkerManager>::start(
-                initial_state,
-                layout_factory,
-                opts.random_pipeline_closure_probability,
-                opts.random_pipeline_closure_seed,
-                opts.hard_fail,
-            );
-
-        // Create webdriver thread
-        let webdriver_receiver = if let Some(port) = config.webdriver_port {
-            let (embedder_sender, embedder_receiver) = unbounded();
-            let (webdriver_response_sender, webdriver_response_receiver) = ipc::channel().unwrap();
-
-            // Set the WebDriver response sender to constellation.
-            // TODO: consider using Servo API to notify embedder about input events completions
-            constellation_sender
-                .send(EmbedderToConstellationMessage::SetWebDriverResponseSender(
-                    webdriver_response_sender,
-                ))
-                .unwrap_or_else(|_| {
-                    log::warn!("Failed to set WebDriver response sender in constellation");
-                });
-            webdriver_server::start_server(
-                port,
-                embedder_sender,
-                event_loop_waker.clone(),
-                webdriver_response_receiver,
-            );
-            Some(embedder_receiver)
-        } else {
-            None
-        };
-
-        // The compositor coordinates with the client window to create the final
-        // rendered page and display it somewhere.
-        let mut compositor = IOCompositor::new(
-            window.id(),
-            window.size(),
-            Scale::new(window.scale_factor() as f32),
-            InitialCompositorState {
-                sender: compositor_proxy,
-                receiver: compositor_receiver,
-                constellation_chan: constellation_sender.clone(),
-                time_profiler_chan: time_profiler_sender,
-                mem_profiler_chan: mem_profiler_sender,
-                webrender,
-                webrender_document,
-                webrender_api,
-                rendering_context,
-                webrender_gl,
-            },
-            opts.wait_for_stable_image,
-        );
-
-        if let Some(zoom_level) = zoom_level {
-            compositor.on_zoom_window_event(zoom_level, &window);
-        }
-
-        let mut javascript_evaluator = JavaScriptEvaluator::new();
+        let servo_builder = ServoBuilder::new(rendering_context)
+            .opts(opts)
+            .preferences(preferences)
+            .user_content_manager(user_content_manager)
+            .protocol_registry(protocols)
+            .event_loop_waker(event_loop_waker);
+        let servo = servo_builder.build();
+        servo.setup_logging();
+        servo.set_delegate(Rc::new(VersoServoDelegate));
 
         if with_panel {
-            window.create_panel(&constellation_sender, initial_url);
+            window.create_panel(&servo, initial_url);
         } else {
-            window.create_tab(
-                &constellation_sender,
-                initial_url.into(),
-                &mut javascript_evaluator,
-            );
+            window.create_tab(&servo, initial_url.into());
         }
 
         let mut windows = HashMap::new();
-        windows.insert(window.id(), (window, webrender_document));
+        windows.insert(window.id(), window);
 
         // Create Verso instance
         let verso = Verso {
+            servo,
             windows,
-            compositor: Some(compositor),
-            constellation_sender,
             to_controller_sender,
-            embedder_receiver,
-            webdriver_receiver,
-            _js_engine_setup: js_engine_setup,
-            clipboard: Clipboard::new().ok(),
+            // embedder_receiver,
+            // webdriver_receiver,
             config,
             bookmark_manager: BookmarkManager::new(),
-            javascript_evaluator,
         };
 
-        verso.setup_logging();
         verso
     }
 
@@ -411,10 +182,7 @@ impl Verso {
     fn handle_winit_window_event(&mut self, window_id: WindowId, event: WindowEvent) -> bool {
         log::trace!("Verso is handling Winit event: {event:?}");
 
-        let Some(compositor) = &mut self.compositor else {
-            return false;
-        };
-        let Some((window, _)) = self.windows.get_mut(&window_id) else {
+        let Some(window) = self.windows.get_mut(&window_id) else {
             return false;
         };
 
@@ -435,12 +203,7 @@ impl Verso {
             // self.windows.remove(&window_id);
             compositor.start_shutting_down();
         } else {
-            window.handle_winit_window_event(
-                &self.constellation_sender,
-                compositor,
-                &event,
-                &mut self.javascript_evaluator,
-            );
+            window.handle_winit_window_event(&self.constellation_sender, &event);
             return window.resizing;
         }
 
@@ -449,118 +212,44 @@ impl Verso {
 
     /// Handle message came from Servo.
     pub fn handle_servo_messages(&mut self, evl: &ActiveEventLoop) {
-        if self.compositor.is_none() {
-            log::error!("Verso shouldn't be handling messages after compositor has shut down");
-            return;
-        }
-        let compositor = self.compositor.as_mut().unwrap();
-
-        // Handle Compositor's messages first
-        log::trace!("Verso is handling Compositor messages");
-
-        let mut messages = Vec::new();
-        while let Ok(message) = compositor.compositor_receiver.try_recv() {
-            match message {
-                Ok(message) => messages.push(message),
-                Err(error) => {
-                    log::warn!(
-                        "Router deserialization error: {error}. Ignoring this CompositorMsg."
-                    )
-                }
-            }
-        }
-        compositor.handle_messages(&mut self.windows, messages);
+        let should_shutdown = self.servo.spin_event_loop();
 
         // Only handle incoming embedder messages if the compositor hasn't already started shutting down.
-        while let Ok(msg) = self.embedder_receiver.try_recv() {
-            if let Some(webview_id) = Self::get_embedder_message_webview_id(&msg) {
-                if let Some((window, document_id)) = self
-                    .windows
-                    .values_mut()
-                    .find(|(window, _)| window.has_webview(*webview_id))
-                {
-                    if window.handle_servo_message(
-                        *webview_id,
-                        msg,
-                        &self.constellation_sender,
-                        &self.to_controller_sender,
-                        self.clipboard.as_mut(),
-                        compositor,
-                        &mut self.bookmark_manager,
-                        &mut self.javascript_evaluator,
-                    ) {
-                        let mut window = Window::new_with_compositor(
-                            evl,
-                            self.config.window_attributes.clone(),
-                            compositor,
-                        );
-                        window.create_panel(&self.constellation_sender, self.config.url.clone());
-                        let webrender_document = *document_id;
-                        self.windows
-                            .insert(window.id(), (window, webrender_document));
-                    }
-                }
-            } else {
-                // Handle message in Verso Window
-                log::trace!("Verso Window is handling Embedder message: {msg:?}");
-                match msg {
-                    EmbedderMsg::OnDevtoolsStarted(port, _token) => {
-                        if let Ok(port) = port {
-                            // We use level error by default so this won't show
-                            // log::info!("Devtools server listening on port {port}");
-                            println!("Devtools server listening on port {port}");
-                        } else {
-                            log::error!("Failed to start devtools server");
-                        }
-                    }
-                    EmbedderMsg::RequestDevtoolsConnection(sender) => {
-                        if let Err(err) = sender.send(AllowOrDeny::Allow) {
-                            log::error!(
-                                "Failed to send RequestDevtoolsConnection response back: {err}"
-                            );
-                        }
-                    }
-                    EmbedderMsg::FinishJavaScriptEvaluation(evaluation_id, result) => {
-                        self.javascript_evaluator
-                            .finish_evaluation(evaluation_id, result);
-                    }
-                    EmbedderMsg::ShutdownComplete => {
-                        compositor.finish_shutting_down();
-                    }
-                    e => {
-                        log::trace!(
-                            "Verso Window isn't supporting handling this message yet: {e:?}"
-                        )
-                    }
-                }
-            }
-
-            if compositor.shutdown_state == ShutdownState::FinishedShuttingDown {
-                break;
-            }
-        }
-
-        compositor.perform_updates(&mut self.windows);
-
-        if compositor.needs_repaint() {
-            if let Some(window) = self.windows.get(&compositor.current_window) {
-                window.0.request_redraw();
-            }
-        }
+        // while let Ok(msg) = self.embedder_receiver.try_recv() {
+        //     if let Some(webview_id) = Self::get_embedder_message_webview_id(&msg) {
+        //         if let Some((window, document_id)) = self
+        //             .windows
+        //             .values_mut()
+        //             .find(|window| window.has_webview(*webview_id))
+        //         {
+        //             if window.handle_servo_message(
+        //                 *webview_id,
+        //                 msg,
+        //                 &self.constellation_sender,
+        //                 &self.to_controller_sender,
+        //                 self.clipboard.as_mut(),
+        //                 &mut self.bookmark_manager,
+        //             ) {
+        //                 let mut window = Window::new_with_compositor(
+        //                     evl,
+        //                     self.config.window_attributes.clone(),
+        //                     compositor,
+        //                 );
+        //                 window.create_panel(&self.constellation_sender, self.config.url.clone());
+        //                 let webrender_document = *document_id;
+        //                 self.windows
+        //                     .insert(window.id(), (window, webrender_document));
+        //             }
+        //         }
+        //     }
+        // }
 
         // Check if Verso need to start shutting down.
-        if self.windows.is_empty() {
-            compositor.start_shutting_down();
-        }
+        // if self.windows.is_empty() {
+        //     compositor.start_shutting_down();
+        // }
 
-        let shutdown = compositor.shutdown_state == ShutdownState::FinishedShuttingDown;
-
-        // Check compositor status and set control flow.
-        if shutdown {
-            // If Compositor has shut down, deinit and remove it.
-            if let Some(mut compositor) = self.compositor.take() {
-                IOCompositor::deinit(&mut compositor)
-            }
+        if should_shutdown {
             evl.exit();
         } else if self.is_animating() {
             evl.set_control_flow(ControlFlow::Poll);
@@ -607,7 +296,6 @@ impl Verso {
             EmbedderMsg::PlayGamepadHapticEffect(webview_id, ..) => Some(webview_id),
             EmbedderMsg::StopGamepadHapticEffect(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShowNotification(opt_webview_id, ..) => opt_webview_id.as_ref(),
-            EmbedderMsg::ShowFormControl(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShutdownComplete => None,
             EmbedderMsg::FinishJavaScriptEvaluation(..) => None,
             EmbedderMsg::HistoryTraversalComplete(webview_id, ..) => Some(webview_id),
@@ -618,27 +306,27 @@ impl Verso {
 
     // TODO: Implement this
     /// Handle webdriver messages
-    pub fn handle_webdriver_messages(&self) {
-        let Some(webdriver_receiver) = &self.webdriver_receiver else {
-            return;
-        };
+    // pub fn handle_webdriver_messages(&self) {
+    //     let Some(webdriver_receiver) = &self.webdriver_receiver else {
+    //         return;
+    //     };
 
-        while let Ok(msg) = webdriver_receiver.try_recv() {
-            match msg {
-                WebDriverCommandMsg::KeyboardAction(..)
-                | WebDriverCommandMsg::MouseButtonAction(..)
-                | WebDriverCommandMsg::MouseMoveAction(..)
-                | WebDriverCommandMsg::WheelScrollAction(..)
-                | WebDriverCommandMsg::ScriptCommand(..)
-                | WebDriverCommandMsg::TakeScreenshot(..) => {
-                    log::warn!(
-                        "WebDriverCommand {msg:?} is still not moved from constellation to embedder"
-                    );
-                }
-                _ => log::warn!("WebDriverCommand {msg:?} is not supported yet"),
-            };
-        }
-    }
+    //     while let Ok(msg) = webdriver_receiver.try_recv() {
+    //         match msg {
+    //             WebDriverCommandMsg::KeyboardAction(..)
+    //             | WebDriverCommandMsg::MouseButtonAction(..)
+    //             | WebDriverCommandMsg::MouseMoveAction(..)
+    //             | WebDriverCommandMsg::WheelScrollAction(..)
+    //             | WebDriverCommandMsg::ScriptCommand(..)
+    //             | WebDriverCommandMsg::TakeScreenshot(..) => {
+    //                 log::warn!(
+    //                     "WebDriverCommand {msg:?} is still not moved from constellation to embedder"
+    //                 );
+    //             }
+    //             _ => log::warn!("WebDriverCommand {msg:?} is not supported yet"),
+    //         };
+    //     }
+    // }
 
     /// Request Verso to redraw. It will queue a redraw event on current focused window.
     pub fn request_redraw(&mut self, evl: &ActiveEventLoop) {
@@ -646,7 +334,7 @@ impl Verso {
             return;
         };
 
-        if let Some((window, _)) = self.windows.get(&compositor.current_window) {
+        if let Some(window) = self.windows.get(&compositor.current_window) {
             // evl.set_control_flow(ControlFlow::Poll);
             window.request_redraw();
 
@@ -964,39 +652,23 @@ impl Verso {
     }
 
     fn first_window(&self) -> Option<&Window> {
-        self.windows.values().next().map(|(window, _)| window)
+        self.windows.values().next().map(|window| window)
     }
 
     fn first_window_mut(&mut self) -> Option<&mut Window> {
-        self.windows.values_mut().next().map(|(window, _)| window)
+        self.windows.values_mut().next().map(|window| window)
     }
 
     fn first_webview_id(&self) -> Option<WebViewId> {
         self.windows
             .values()
             .next()
-            .and_then(|(window, _)| window.tab_manager.current_tab().map(|tab| tab.id()))
+            .and_then(|window| window.tab_manager.current_tab().map(|tab| tab.id()))
     }
 
     /// Return true if one of the Verso windows is animating.
     pub fn is_animating(&self) -> bool {
-        self.compositor
-            .as_ref()
-            .map(|c| c.is_animating)
-            .unwrap_or(false)
-    }
-
-    fn setup_logging(&self) {
-        let constellation_chan = self.constellation_sender.clone();
-        let env = env_logger::Env::default();
-        let env_logger = env_logger::Builder::from_env(env).build();
-        let con_logger = FromEmbedderLogger::new(constellation_chan);
-
-        let filter = std::cmp::max(env_logger.filter(), con_logger.filter());
-        let logger = BothLogger(env_logger, con_logger);
-
-        log::set_boxed_logger(Box::new(logger)).expect("Failed to set logger.");
-        log::set_max_level(filter);
+        self.servo.animating()
     }
 }
 
@@ -1085,38 +757,6 @@ impl EventLoopWaker for Waker {
         if let Err(e) = self.0.send_event(EventLoopProxyMessage::Wake) {
             log::error!("Servo failed to send wake up event to Verso: {e}");
         }
-    }
-}
-
-#[derive(Clone)]
-struct RenderNotifier {
-    compositor_proxy: CompositorProxy,
-}
-
-impl RenderNotifier {
-    pub fn new(compositor_proxy: CompositorProxy) -> RenderNotifier {
-        RenderNotifier { compositor_proxy }
-    }
-}
-
-impl webrender::api::RenderNotifier for RenderNotifier {
-    fn clone(&self) -> Box<dyn webrender::api::RenderNotifier> {
-        Box::new(RenderNotifier::new(self.compositor_proxy.clone()))
-    }
-
-    fn wake_up(&self, _composite_needed: bool) {}
-
-    fn new_frame_ready(
-        &self,
-        document_id: DocumentId,
-        _publish_id: FramePublishId,
-        params: &FrameReadyParams,
-    ) {
-        self.compositor_proxy
-            .send(CompositorMsg::NewWebRenderFrameReady(
-                document_id,
-                params.render,
-            ));
     }
 }
 

@@ -8,6 +8,7 @@ use embedder_traits::{
 };
 use euclid::Scale;
 use ipc_channel::ipc;
+use servo::WebView;
 use servo_url::ServoUrl;
 use url::Url;
 use versoview_messages::ToControllerMessage;
@@ -15,8 +16,6 @@ use webrender_api::units::{DevicePoint, DeviceRect};
 
 use crate::{
     bookmark::BookmarkManager,
-    compositor::IOCompositor,
-    javascript_evaluator::JavaScriptEvaluator,
     tab::{TabActivateRequest, TabCloseRequest, TabCreateResponse},
     verso::send_to_constellation,
     webview::{
@@ -28,32 +27,6 @@ use crate::{
 
 #[cfg(linux)]
 use crate::webview::context_menu::ContextMenuUIResponse;
-
-/// A web view is an area to display web browsing context. It's what user will treat as a "web page".
-#[derive(Debug, Clone)]
-pub struct WebView {
-    /// Webview ID
-    pub webview_id: WebViewId,
-    /// The position and size of the webview.
-    pub rect: DeviceRect,
-}
-
-impl WebView {
-    /// Create a web view.
-    // TODO: use ViewportDetails instead of hidpi_scale_factor
-    pub fn new(webview_id: WebViewId, viewport_details: ViewportDetails) -> Self {
-        let size = viewport_details.size * viewport_details.hidpi_scale_factor;
-        Self {
-            webview_id,
-            rect: DeviceRect::from_origin_and_size(DevicePoint::origin(), size),
-        }
-    }
-
-    /// Set the webview size.
-    pub fn set_size(&mut self, rect: DeviceRect) {
-        self.rect = rect;
-    }
-}
 
 /// A panel is a special web view that focus on controlling states around window.
 /// It could be treated as the control panel or navigation bar of the window depending on usages.
@@ -83,7 +56,6 @@ impl Window {
         to_controller_sender: &Option<ipc::IpcSender<ToControllerMessage>>,
         clipboard: Option<&mut Clipboard>,
         compositor: &mut IOCompositor,
-        javascript_evaluator: &mut JavaScriptEvaluator,
     ) {
         log::trace!("Verso WebView {webview_id:?} is handling Embedder message: {message:?}",);
         match message {
@@ -431,7 +403,6 @@ impl Window {
         clipboard: Option<&mut Clipboard>,
         compositor: &mut IOCompositor,
         bookmark_manager: &mut BookmarkManager,
-        javascript_evaluator: &mut JavaScriptEvaluator,
     ) -> bool {
         log::trace!("Verso Panel {panel_id:?} is handling Embedder message: {message:?}",);
         match message {
@@ -462,11 +433,7 @@ impl Window {
                         EmbedderToConstellationMessage::FocusWebView(panel_id),
                     );
 
-                    self.create_tab(
-                        sender,
-                        self.panel.as_ref().unwrap().initial_url.clone(),
-                        javascript_evaluator,
-                    );
+                    self.create_tab(sender, self.panel.as_ref().unwrap().initial_url.clone());
                 }
             },
             EmbedderMsg::AllowNavigationRequest(_webview_id, id, _url) => {
@@ -512,50 +479,45 @@ impl Window {
                             let _ = response_sender.send(PromptResponse::default());
 
                             // FIXME: set dirty flag, and only resize when flag is set
-                            self.activate_tab(
-                                compositor,
-                                tab_id,
-                                self.tab_manager.count() > 1,
-                                javascript_evaluator,
-                            );
+                            self.activate_tab(compositor, tab_id, self.tab_manager.count() > 1);
 
                             return false;
                         } else if message == "NEW_TAB" {
-                            let hidpi_scale_factor = Scale::new(self.scale_factor() as f32);
+                            // let hidpi_scale_factor = Scale::new(self.scale_factor() as f32);
 
-                            let webview_id = WebViewId::new();
-                            let size = self.size();
-                            let rect = DeviceRect::from_size(size);
-                            let content_size =
-                                self.get_content_size(rect, true, self.show_bookmark);
-                            let size = content_size.size().to_f32() / hidpi_scale_factor;
-                            let webview = WebView::new(
-                                webview_id,
-                                ViewportDetails {
-                                    size,
-                                    hidpi_scale_factor,
-                                },
-                            );
+                            // let webview_id = WebViewId::new();
+                            // let size = self.size();
+                            // let rect = DeviceRect::from_size(size);
+                            // let content_size =
+                            //     self.get_content_size(rect, true, self.show_bookmark);
+                            // let size = content_size.size().to_f32() / hidpi_scale_factor;
+                            // let webview = WebView::new(
+                            //     webview_id,
+                            //     ViewportDetails {
+                            //         size,
+                            //         hidpi_scale_factor,
+                            //     },
+                            // );
 
-                            self.tab_manager.append_tab(webview, true);
+                            // self.tab_manager.append_tab(webview, true);
 
-                            let size = content_size.size().to_f32() / hidpi_scale_factor;
-                            send_to_constellation(
-                                sender,
-                                EmbedderToConstellationMessage::NewWebView(
-                                    ServoUrl::parse("https://example.com").unwrap(),
-                                    webview_id,
-                                    ViewportDetails {
-                                        size,
-                                        hidpi_scale_factor,
-                                    },
-                                ),
-                            );
-                            let result = TabCreateResponse {
-                                success: true,
-                                id: webview_id,
-                            };
-                            let _ = response_sender.send(PromptResponse::Ok(result.to_json()));
+                            // let size = content_size.size().to_f32() / hidpi_scale_factor;
+                            // send_to_constellation(
+                            //     sender,
+                            //     EmbedderToConstellationMessage::NewWebView(
+                            //         ServoUrl::parse("https://example.com").unwrap(),
+                            //         webview_id,
+                            //         ViewportDetails {
+                            //             size,
+                            //             hidpi_scale_factor,
+                            //         },
+                            //     ),
+                            // );
+                            // let result = TabCreateResponse {
+                            //     success: true,
+                            //     id: webview_id,
+                            // };
+                            // let _ = response_sender.send(PromptResponse::Ok(result.to_json()));
                             return false;
                         } else if message.starts_with("OPEN_HISTORY_MENU") {
                             let request_str = message.strip_prefix("OPEN_HISTORY_MENU:").unwrap();
