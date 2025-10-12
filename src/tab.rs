@@ -2,10 +2,10 @@ use std::collections::HashMap;
 
 use crate::webview::prompt::PromptDialog;
 use base::id::WebViewId;
+use dpi::PhysicalSize;
 use serde::{Deserialize, Serialize};
 use servo::WebView;
 use servo_url::ServoUrl;
-use webrender_api::units::DeviceRect;
 
 /// Tab state
 pub struct Tab {
@@ -44,8 +44,8 @@ impl Tab {
     }
 
     /// Set tab WebView size.
-    pub fn set_webview_size(&mut self, rect: DeviceRect) {
-        self.webview.set_size(rect);
+    pub fn set_webview_size(&mut self, size: PhysicalSize<u32>) {
+        self.webview.resize(size);
     }
 
     /// Get tab history.
@@ -84,7 +84,7 @@ impl Tab {
     }
 
     /// Set prompt webview size.
-    pub fn set_prompt_size(&mut self, rect: DeviceRect) {
+    pub fn set_prompt_size(&mut self, rect: PhysicalSize<u32>) {
         if let Some(prompt) = self.prompt.as_mut() {
             prompt.set_size(rect);
         }
@@ -148,6 +148,12 @@ impl TabManager {
     pub fn tab_ids(&self) -> Vec<WebViewId> {
         self.tab_map.keys().cloned().collect()
     }
+
+    /// Get all tab id.
+    pub fn tabs(&self) -> std::collections::hash_map::Values<'_, WebViewId, Tab> {
+        self.tab_map.values()
+    }
+
     /// Activate the tab by tab id.
     pub fn activate_tab(&mut self, tab_id: WebViewId) -> Option<&Tab> {
         if let Some(tab) = self.tab_map.get(&tab_id) {
@@ -164,7 +170,7 @@ impl TabManager {
     }
     /// Append a tab.
     pub fn append_tab(&mut self, webview: WebView, active: bool) {
-        let id = webview.webview_id;
+        let id = webview.id();
         let tab = Tab::new(webview);
         self.tab_map.insert(id, tab);
         if active {
@@ -183,13 +189,13 @@ impl TabManager {
     pub fn set_size(
         &mut self,
         tab_id: WebViewId,
-        rect: DeviceRect,
+        size: PhysicalSize<u32>,
     ) -> (Option<WebViewId>, Option<WebViewId>) {
         if let Some(tab) = self.tab_map.get_mut(&tab_id) {
-            tab.set_webview_size(rect);
+            tab.set_webview_size(size);
 
             if let Some(prompt_id) = tab.prompt_id() {
-                tab.set_prompt_size(rect);
+                tab.set_prompt_size(size);
                 (Some(tab_id), Some(prompt_id))
             } else {
                 (Some(tab_id), None)

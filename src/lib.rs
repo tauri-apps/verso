@@ -32,3 +32,5 @@ pub use winit;
 pub mod bookmark;
 /// Window tabs manager
 pub mod tab;
+
+mod accelerated_gl_media;

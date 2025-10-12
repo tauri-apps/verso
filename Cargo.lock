@@ -668,7 +668,7 @@ dependencies = [
  "servo_config",
  "servo_malloc_size_of",
  "time",
- "webrender_api 0.68.0",
+ "webrender_api",
  "windows-sys 0.61.1",
 ]
 
@@ -1055,7 +1055,7 @@ dependencies = [
  "unicode-script",
  "vello",
  "vello_cpu",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -1077,7 +1077,7 @@ dependencies = [
  "servo_malloc_size_of",
  "strum",
  "stylo",
- "webrender_api 0.68.0",
+ "webrender_api",
  "webxr-api",
 ]
 
@@ -1334,8 +1334,8 @@ dependencies = [
  "stylo_traits",
  "timers",
  "webrender",
- "webrender_api 0.68.0",
- "wr_malloc_size_of 0.2.2",
+ "webrender_api",
+ "wr_malloc_size_of",
 ]
 
 [[package]]
@@ -1367,7 +1367,7 @@ dependencies = [
  "stylo",
  "stylo_traits",
  "surfman",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -1443,7 +1443,7 @@ dependencies = [
  "webgpu",
  "webgpu_traits",
  "webrender",
- "webrender_api 0.68.0",
+ "webrender_api",
  "webxr-api",
 ]
 
@@ -1480,7 +1480,7 @@ dependencies = [
  "stylo_traits",
  "uuid",
  "webgpu_traits",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -2044,7 +2044,7 @@ dependencies = [
  "url",
  "uuid",
  "webdriver",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -2440,7 +2440,7 @@ dependencies = [
  "unicode-properties",
  "unicode-script",
  "url",
- "webrender_api 0.68.0",
+ "webrender_api",
  "winapi",
  "xml-rs",
  "yeslogic-fontconfig-sys",
@@ -2466,7 +2466,7 @@ dependencies = [
  "servo_malloc_size_of",
  "servo_url",
  "stylo",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -4446,7 +4446,7 @@ dependencies = [
  "unicode-bidi",
  "unicode-script",
  "url",
- "webrender_api 0.68.0",
+ "webrender_api",
  "xi-unicode",
 ]
 
@@ -4483,7 +4483,7 @@ dependencies = [
  "servo_url",
  "stylo",
  "stylo_traits",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -4599,7 +4599,7 @@ dependencies = [
  "webgl",
  "webgpu",
  "webrender",
- "webrender_api 0.68.0",
+ "webrender_api",
  "webxr",
 ]
 
@@ -4803,7 +4803,7 @@ dependencies = [
  "serde",
  "servo-media",
  "servo_config",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -5097,7 +5097,7 @@ dependencies = [
  "url",
  "uuid",
  "webpki-roots 1.0.2",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -5133,7 +5133,7 @@ dependencies = [
  "servo_url",
  "url",
  "uuid",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -5807,30 +5807,10 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 [[package]]
 name = "peek-poke"
 version = "0.3.0"
-source = "git+https://github.com/servo/webrender?branch=0.67#428d64dc5c92f157be2b0fd85dc7a6506be77132"
-dependencies = [
- "euclid",
- "peek-poke-derive 0.3.0 (git+https://github.com/servo/webrender?branch=0.67)",
-]
-
-[[package]]
-name = "peek-poke"
-version = "0.3.0"
 source = "git+https://github.com/servo/webrender?branch=0.68#6cafc606096db4715a6119a6e16391aed9af47a5"
 dependencies = [
  "euclid",
- "peek-poke-derive 0.3.0 (git+https://github.com/servo/webrender?branch=0.68)",
-]
-
-[[package]]
-name = "peek-poke-derive"
-version = "0.3.0"
-source = "git+https://github.com/servo/webrender?branch=0.67#428d64dc5c92f157be2b0fd85dc7a6506be77132"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.106",
- "synstructure",
+ "peek-poke-derive",
 ]
 
 [[package]]
@@ -5986,7 +5966,7 @@ dependencies = [
  "malloc_size_of_derive",
  "serde",
  "servo_malloc_size_of",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -6881,7 +6861,7 @@ dependencies = [
  "uuid",
  "webdriver",
  "webgpu_traits",
- "webrender_api 0.68.0",
+ "webrender_api",
  "wgpu-core",
  "wgpu-types",
  "xml5ever",
@@ -6959,7 +6939,7 @@ dependencies = [
  "strum_macros",
  "stylo_atoms",
  "stylo_traits",
- "webrender_api 0.68.0",
+ "webrender_api",
  "webxr-api",
 ]
 
@@ -7303,7 +7283,7 @@ dependencies = [
  "malloc_size_of_derive",
  "servo_malloc_size_of",
  "webrender",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -7340,8 +7320,8 @@ dependencies = [
  "urlpattern",
  "uuid",
  "webrender",
- "webrender_api 0.68.0",
- "wr_malloc_size_of 0.2.2",
+ "webrender_api",
+ "wr_malloc_size_of",
 ]
 
 [[package]]
@@ -8846,11 +8826,11 @@ dependencies = [
  "fonts",
  "getopts",
  "gleam",
+ "glow",
  "glutin",
  "glutin-winit",
  "headers 0.4.1",
  "http 1.3.1",
- "image",
  "ipc-channel",
  "keyboard-types 0.8.3",
  "layout",
@@ -8869,7 +8849,6 @@ dependencies = [
  "profile_traits",
  "raw-window-handle",
  "rfd",
- "rustc-hash 2.1.1",
  "rustls",
  "script",
  "script_traits",
@@ -8882,12 +8861,13 @@ dependencies = [
  "servo_geometry",
  "servo_url",
  "sparkle",
+ "surfman",
  "thiserror 2.0.17",
  "url",
  "uuid",
  "versoview_messages",
  "webdriver_server",
- "webrender_api 0.66.0",
+ "webrender_api",
  "winit",
 ]
 
@@ -9248,7 +9228,7 @@ dependencies = [
  "time",
  "uuid",
  "webdriver",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -9272,7 +9252,7 @@ dependencies = [
  "rustc-hash 2.1.1",
  "surfman",
  "webrender",
- "webrender_api 0.68.0",
+ "webrender_api",
 ]
 
 [[package]]
@@ -9291,7 +9271,7 @@ dependencies = [
  "serde",
  "servo_config",
  "webgpu_traits",
- "webrender_api 0.68.0",
+ "webrender_api",
  "wgpu-core",
  "wgpu-types",
 ]
@@ -9307,7 +9287,7 @@ dependencies = [
  "pixels",
  "serde",
  "servo_malloc_size_of",
- "webrender_api 0.68.0",
+ "webrender_api",
  "wgpu-core",
  "wgpu-types",
 ]
@@ -9349,7 +9329,7 @@ dependencies = [
  "log",
  "malloc_size_of_derive",
  "num-traits",
- "peek-poke 0.3.0 (git+https://github.com/servo/webrender?branch=0.68)",
+ "peek-poke",
  "plane-split",
  "rayon",
  "ron",
@@ -9359,32 +9339,11 @@ dependencies = [
  "svg_fmt",
  "topological-sort",
  "tracy-rs",
- "webrender_api 0.68.0",
+ "webrender_api",
  "webrender_build",
  "wr_glyph_rasterizer",
- "wr_malloc_size_of 0.2.2",
+ "wr_malloc_size_of",
  "zeitstempel",
-]
-
-[[package]]
-name = "webrender_api"
-version = "0.66.0"
-source = "git+https://github.com/servo/webrender?branch=0.67#428d64dc5c92f157be2b0fd85dc7a6506be77132"
-dependencies = [
- "app_units",
- "bitflags 2.9.4",
- "byteorder",
- "crossbeam-channel",
- "euclid",
- "libc",
- "mach2",
- "malloc_size_of_derive",
- "peek-poke 0.3.0 (git+https://github.com/servo/webrender?branch=0.67)",
- "serde",
- "serde_bytes",
- "serde_derive",
- "windows-sys 0.59.0",
- "wr_malloc_size_of 0.2.0",
 ]
 
 [[package]]
@@ -9398,11 +9357,11 @@ dependencies = [
  "crossbeam-channel",
  "euclid",
  "malloc_size_of_derive",
- "peek-poke 0.3.0 (git+https://github.com/servo/webrender?branch=0.68)",
+ "peek-poke",
  "serde",
  "serde_bytes",
  "serde_derive",
- "wr_malloc_size_of 0.2.2",
+ "wr_malloc_size_of",
  "zeitstempel",
 ]
 
@@ -10191,17 +10150,8 @@ dependencies = [
  "serde",
  "smallvec",
  "tracy-rs",
- "webrender_api 0.68.0",
- "wr_malloc_size_of 0.2.2",
-]
-
-[[package]]
-name = "wr_malloc_size_of"
-version = "0.2.0"
-source = "git+https://github.com/servo/webrender?branch=0.67#428d64dc5c92f157be2b0fd85dc7a6506be77132"
-dependencies = [
- "app_units",
- "euclid",
+ "webrender_api",
+ "wr_malloc_size_of",
 ]
 
 [[package]]

@@ -1,9 +1,4 @@
-use std::{
-    collections::HashMap,
-    fmt::Debug,
-    rc::Rc,
-    sync::{Arc, atomic::Ordering},
-};
+use std::{collections::HashMap, fmt::Debug, rc::Rc};
 
 use arboard::Clipboard;
 use base::{
@@ -25,10 +20,9 @@ use euclid::Scale;
 use fonts::SystemFontService;
 use ipc_channel::ipc::{self, IpcSender};
 use ipc_channel::router::ROUTER;
-use log::{Log, Metadata, Record};
 use net::resource_thread;
 use script::{self, JSEngineSetup};
-use servo::{AllowOrDenyRequest, Servo, ServoBuilder, ServoDelegate, ServoError};
+use servo::{AllowOrDenyRequest, Servo, ServoBuilder, ServoDelegate, ServoError, WebView};
 use servo_config::{opts, pref};
 use servo_url::ServoUrl;
 use versoview_messages::{PositionType, SizeType, ToControllerMessage, ToVersoMessage};
@@ -100,7 +94,7 @@ impl Verso {
         let user_scripts = config.user_scripts.clone();
         let zoom_level = config.zoom_level;
 
-        let (mut window, rendering_context) = Window::new(evl, window_settings);
+        let mut window = Window::new(evl, window_settings);
         let event_loop_waker = Box::new(Waker(proxy));
 
         let (opts, preferences) = config.init();
@@ -109,7 +103,7 @@ impl Verso {
             user_content_manager.add_script(script);
         }
 
-        let servo_builder = ServoBuilder::new(rendering_context)
+        let servo_builder = ServoBuilder::new(window.rendering_context.clone())
             .opts(opts)
             .preferences(preferences)
             .user_content_manager(user_content_manager)
@@ -122,7 +116,7 @@ impl Verso {
         if with_panel {
             window.create_panel(&servo, initial_url);
         } else {
-            window.create_tab(&servo, initial_url.into());
+            window.create_tab(&servo, initial_url);
         }
 
         let mut windows = HashMap::new();
@@ -171,15 +165,20 @@ impl Verso {
 
         #[cfg(windows)]
         {
-            self.handle_winit_window_event(window_id, event);
+            self.handle_winit_window_event(event_loop, window_id, event);
             self.handle_servo_messages(event_loop);
         }
 
-        self.handle_webdriver_messages();
+        // self.handle_webdriver_messages();
     }
 
     /// Handle Winit window events
-    fn handle_winit_window_event(&mut self, window_id: WindowId, event: WindowEvent) -> bool {
+    fn handle_winit_window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) -> bool {
         log::trace!("Verso is handling Winit event: {event:?}");
 
         let Some(window) = self.windows.get_mut(&window_id) else {
@@ -201,9 +200,10 @@ impl Verso {
                 }
             }
             // self.windows.remove(&window_id);
-            compositor.start_shutting_down();
+            self.servo.start_shutting_down();
+            event_loop.exit();
         } else {
-            window.handle_winit_window_event(&self.constellation_sender, &event);
+            window.handle_winit_window_event(&self.servo, &event);
             return window.resizing;
         }
 
@@ -211,7 +211,7 @@ impl Verso {
     }
 
     /// Handle message came from Servo.
-    pub fn handle_servo_messages(&mut self, evl: &ActiveEventLoop) {
+    pub fn handle_servo_messages(&mut self, event_loop: &ActiveEventLoop) {
         let should_shutdown = self.servo.spin_event_loop();
 
         // Only handle incoming embedder messages if the compositor hasn't already started shutting down.
@@ -250,11 +250,11 @@ impl Verso {
         // }
 
         if should_shutdown {
-            evl.exit();
+            event_loop.exit();
         } else if self.is_animating() {
-            evl.set_control_flow(ControlFlow::Poll);
+            event_loop.set_control_flow(ControlFlow::Poll);
         } else {
-            evl.set_control_flow(ControlFlow::Wait);
+            event_loop.set_control_flow(ControlFlow::Wait);
         }
     }
 
@@ -273,7 +273,6 @@ impl Verso {
             EmbedderMsg::WebViewFocused(webview_id, ..) => Some(webview_id),
             EmbedderMsg::WebViewBlurred => None,
             EmbedderMsg::AllowUnload(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::Keyboard(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ClearClipboard(webview_id) => Some(webview_id),
             EmbedderMsg::GetClipboardText(webview_id, ..) => Some(webview_id),
             EmbedderMsg::SetClipboardText(webview_id, ..) => Some(webview_id),
@@ -301,6 +300,8 @@ impl Verso {
             EmbedderMsg::HistoryTraversalComplete(webview_id, ..) => Some(webview_id),
             EmbedderMsg::GetWindowRect(webview_id, ..) => Some(webview_id),
             EmbedderMsg::GetScreenMetrics(webview_id, ..) => Some(webview_id),
+            EmbedderMsg::ShowEmbedderControl(..) => None,
+            EmbedderMsg::InputEventHandled(webview_id, ..) => Some(webview_id),
         }
     }
 
@@ -329,22 +330,22 @@ impl Verso {
     // }
 
     /// Request Verso to redraw. It will queue a redraw event on current focused window.
-    pub fn request_redraw(&mut self, evl: &ActiveEventLoop) {
-        let Some(compositor) = &mut self.compositor else {
-            return;
-        };
+    pub fn request_redraw(&mut self, event_loop: &ActiveEventLoop) {
+        // let Some(compositor) = &mut self.compositor else {
+        //     return;
+        // };
 
-        if let Some(window) = self.windows.get(&compositor.current_window) {
-            // evl.set_control_flow(ControlFlow::Poll);
-            window.request_redraw();
+        // if let Some(window) = self.windows.get(&compositor.current_window) {
+        //     // evl.set_control_flow(ControlFlow::Poll);
+        //     window.request_redraw();
 
-            // Wait for `request_redraw` to trigger the next event loop if the window is visible
-            if window.window.is_visible().unwrap_or(true) {
-                return;
-            }
-        }
+        //     // Wait for `request_redraw` to trigger the next event loop if the window is visible
+        //     if window.window.is_visible().unwrap_or(true) {
+        //         return;
+        //     }
+        // }
 
-        self.handle_servo_messages(evl);
+        self.handle_servo_messages(event_loop);
     }
 
     /// Handle message came from webview controller.
@@ -355,10 +356,11 @@ impl Verso {
     ) {
         match message {
             ToVersoMessage::Exit => {
-                if let Some(compositor) = &mut self.compositor {
-                    compositor.start_shutting_down();
-                    self.handle_servo_messages(event_loop);
-                }
+                // if let Some(compositor) = &mut self.compositor {
+                //     compositor.start_shutting_down();
+                //     self.handle_servo_messages(event_loop);
+                // }
+                event_loop.exit();
             }
             ToVersoMessage::ListenToOnCloseRequested => {
                 if let Some(window) = self.first_window_mut() {
@@ -366,22 +368,13 @@ impl Verso {
                 }
             }
             ToVersoMessage::NavigateTo(to_url) => {
-                if let Some(webview_id) = self.first_webview_id() {
-                    send_to_constellation(
-                        &self.constellation_sender,
-                        EmbedderToConstellationMessage::LoadUrl(
-                            webview_id,
-                            ServoUrl::from_url(to_url),
-                        ),
-                    );
+                if let Some(webview) = self.first_webview() {
+                    webview.load(to_url);
                 }
             }
             ToVersoMessage::Reload => {
-                if let Some(webview_id) = self.first_webview_id() {
-                    send_to_constellation(
-                        &self.constellation_sender,
-                        EmbedderToConstellationMessage::Reload(webview_id),
-                    );
+                if let Some(webview) = self.first_webview() {
+                    webview.reload();
                 }
             }
             ToVersoMessage::ListenToOnNavigationStarting => {
@@ -390,21 +383,17 @@ impl Verso {
                 }
             }
             ToVersoMessage::OnNavigationStartingResponse(id, allow) => {
-                send_to_constellation(
-                    &self.constellation_sender,
-                    EmbedderToConstellationMessage::AllowNavigationResponse(
-                        bincode::deserialize(&id).unwrap(),
-                        allow,
-                    ),
-                );
+                // send_to_constellation(
+                //     &self.constellation_sender,
+                //     EmbedderToConstellationMessage::AllowNavigationResponse(
+                //         bincode::deserialize(&id).unwrap(),
+                //         allow,
+                //     ),
+                // );
             }
             ToVersoMessage::ExecuteScript(js) => {
-                if let Some(webview_id) = self.first_webview_id() {
-                    self.javascript_evaluator.evaluate_ignore_result(
-                        &self.constellation_sender,
-                        &webview_id,
-                        js,
-                    );
+                if let Some(webview) = self.first_webview() {
+                    webview.evaluate_javascript(js, |_| {});
                 }
             }
             ToVersoMessage::ListenToWebResourceRequests => {
@@ -659,11 +648,11 @@ impl Verso {
         self.windows.values_mut().next().map(|window| window)
     }
 
-    fn first_webview_id(&self) -> Option<WebViewId> {
+    fn first_webview(&self) -> Option<&WebView> {
         self.windows
             .values()
             .next()
-            .and_then(|window| window.tab_manager.current_tab().map(|tab| tab.id()))
+            .and_then(|window| window.tab_manager.current_tab().map(|tab| tab.webview()))
     }
 
     /// Return true if one of the Verso windows is animating.
@@ -762,27 +751,6 @@ impl EventLoopWaker for Waker {
 
 // A logger that logs to two downstream loggers.
 // This should probably be in the log crate.
-struct BothLogger<Log1, Log2>(Log1, Log2);
-
-impl<Log1, Log2> Log for BothLogger<Log1, Log2>
-where
-    Log1: Log,
-    Log2: Log,
-{
-    fn enabled(&self, metadata: &Metadata) -> bool {
-        self.0.enabled(metadata) || self.1.enabled(metadata)
-    }
-
-    fn log(&self, record: &Record) {
-        self.0.log(record);
-        self.1.log(record);
-    }
-
-    fn flush(&self) {
-        self.0.flush();
-        self.1.flush();
-    }
-}
 
 pub(crate) fn send_to_constellation(
     sender: &Sender<EmbedderToConstellationMessage>,

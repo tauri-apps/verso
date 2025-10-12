@@ -14,7 +14,7 @@ use net_traits::{
     response::{Response, ResponseBody},
 };
 use servo_config::{
-    opts::{Opts, OutputOptions, initialize_options},
+    opts::{Opts, OutputOptions},
     prefs::Preferences,
 };
 use versoview_messages::{ConfigFromController, CustomProtocol, UserScript};

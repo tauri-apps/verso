@@ -43,7 +43,7 @@ pub struct Panel {
     /// The panel's webview
     pub(crate) webview: WebView,
     /// The URL to load when the panel gets loaded
-    pub(crate) initial_url: servo_url::ServoUrl,
+    pub(crate) initial_url: url::Url,
 }
 
 impl Window {
@@ -479,7 +479,7 @@ impl Window {
                             let _ = response_sender.send(PromptResponse::default());
 
                             // FIXME: set dirty flag, and only resize when flag is set
-                            self.activate_tab(compositor, tab_id, self.tab_manager.count() > 1);
+                            // self.activate_tab(compositor, tab_id, self.tab_manager.count() > 1);
 
                             return false;
                         } else if message == "NEW_TAB" {

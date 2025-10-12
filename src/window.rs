@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashMap};
+use std::{cell::Cell, collections::HashMap, rc::Rc};
 
 use base::{generic_channel::GenericSender, id::WebViewId};
 use constellation_traits::EmbedderToConstellationMessage;
@@ -25,7 +25,8 @@ use muda::{MenuEvent, MenuEventReceiver};
 use notify_rust::Image;
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
-use servo::{Servo, WebViewBuilder};
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
+use servo::{RenderingContext, Servo, WebViewBuilder, WindowRenderingContext};
 use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
 use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
@@ -49,7 +50,6 @@ use winit::{
 use crate::{
     bookmark::BookmarkManager,
     keyboard::keyboard_event_from_winit,
-    rendering::{RenderingContext, gl_config_picker},
     tab::TabManager,
     verso::send_to_constellation,
     webview::{Panel, WebView, prompt::PromptSender, webview_menu::WebViewMenu},
@@ -85,8 +85,9 @@ pub struct Window {
     /// Access to Winit window
     pub(crate) window: WinitWindow,
     cursor_state: CursorState,
-    /// GL surface of the window
-    pub(crate) surface: Surface<WindowSurface>,
+    // /// GL surface of the window
+    // pub(crate) surface: Surface<WindowSurface>,
+    pub(crate) rendering_context: Rc<WindowRenderingContext>,
     /// The main panel of this window.
     pub(crate) panel: Option<Panel>,
     /// The WebView of this window.
@@ -115,22 +116,40 @@ pub struct Window {
 
 impl Window {
     /// Create a Verso window from Winit window and return the rendering context.
-    pub fn new(
-        evl: &ActiveEventLoop,
-        window_attributes: WindowAttributes,
-    ) -> (Self, RenderingContext) {
-        let template = ConfigTemplateBuilder::new()
-            .with_alpha_size(8)
-            .with_transparency(cfg!(macos));
+    pub fn new(event_loop: &ActiveEventLoop, window_attributes: WindowAttributes) -> Self {
+        // let template = ConfigTemplateBuilder::new()
+        //     .with_alpha_size(8)
+        //     .with_transparency(cfg!(macos));
 
-        let (window, gl_config) = DisplayBuilder::new()
-            .with_window_attributes(Some(window_attributes))
-            .build(evl, template, gl_config_picker)
-            .expect("Failed to create window and gl config");
+        // let (window, gl_config) = DisplayBuilder::new()
+        //     .with_window_attributes(Some(window_attributes))
+        //     .build(evl, template, gl_config_picker)
+        //     .expect("Failed to create window and gl config");
 
-        let window = window.ok_or("Failed to create window").unwrap();
+        let display_handle = event_loop
+            .display_handle()
+            .expect("Failed to get display handle");
+        let window = event_loop
+            .create_window(window_attributes)
+            .expect("Failed to create winit Window");
+        let window_handle = window.window_handle().expect("Failed to get window handle");
+        let rendering_context = Rc::new(
+            WindowRenderingContext::new(display_handle, window_handle, window.inner_size())
+                .expect("Could not create RenderingContext for window."),
+        );
 
-        log::debug!("Picked a config with {} samples", gl_config.num_samples());
+        // Setup for GL accelerated media handling. This is only active on certain Linux platforms
+        // and Windows.
+        {
+            let details = rendering_context.surfman_details();
+            crate::accelerated_gl_media::setup_gl_accelerated_media(details.0, details.1);
+        }
+
+        let _ = rendering_context.make_current();
+
+        // let window = window.ok_or("Failed to create window").unwrap();
+
+        // log::debug!("Picked a config with {} samples", gl_config.num_samples());
 
         #[cfg(macos)]
         unsafe {
@@ -142,64 +161,17 @@ impl Window {
                 );
             }
         }
-        let (rendering_context, surface) =
-            RenderingContext::create(&window, &gl_config, window.inner_size())
-                .expect("Failed to create rendering context");
+        // let (rendering_context, surface) =
+        //     RenderingContext::create(&window, &gl_config, window.inner_size())
+        //         .expect("Failed to create rendering context");
         log::trace!("Created rendering context for window {:?}", window);
 
-        (
-            Self {
-                window,
-                cursor_state: CursorState::default(),
-                surface,
-                panel: None,
-                event_listeners: Default::default(),
-                mouse_position: Default::default(),
-                hovering_webview: None,
-                modifiers_state: Cell::new(ModifiersState::default()),
-                resizing: false,
-                #[cfg(any(target_os = "macos", target_os = "windows"))]
-                menu_event_receiver: MenuEvent::receiver().clone(),
-                tab_manager: TabManager::new(),
-                focused_webview_id: None,
-                webview_menu: None,
-                show_bookmark: false,
-            },
-            rendering_context,
-        )
-    }
-
-    /// Create a Verso window with the rendering context.
-    pub fn new_with_compositor(
-        evl: &ActiveEventLoop,
-        window_attributes: WindowAttributes,
-        compositor: &mut IOCompositor,
-    ) -> Self {
-        let window = evl
-            .create_window(window_attributes)
-            .expect("Failed to create window.");
-
-        #[cfg(macos)]
-        unsafe {
-            let rwh = window.window_handle().expect("Failed to get window handle");
-            if let RawWindowHandle::AppKit(AppKitWindowHandle { ns_view, .. }) = rwh.as_ref() {
-                decorate_window(
-                    ns_view.as_ptr() as *mut AnyObject,
-                    LogicalPosition::new(8.0, 40.0),
-                );
-            }
-        }
-        let surface = compositor
-            .rendering_context
-            .create_surface(&window)
-            .unwrap();
-
-        let mut window = Self {
+        Self {
             window,
             cursor_state: CursorState::default(),
-            surface,
+            // surface,
+            rendering_context,
             panel: None,
-            // webview: None,
             event_listeners: Default::default(),
             mouse_position: Default::default(),
             hovering_webview: None,
@@ -211,18 +183,63 @@ impl Window {
             focused_webview_id: None,
             webview_menu: None,
             show_bookmark: false,
-        };
-        compositor.swap_current_window(&mut window);
-        window
+        }
     }
+
+    // /// Create a Verso window with the rendering context.
+    // pub fn new_with_compositor(
+    //     evl: &ActiveEventLoop,
+    //     window_attributes: WindowAttributes,
+    //     compositor: &mut IOCompositor,
+    // ) -> Self {
+    //     let window = evl
+    //         .create_window(window_attributes)
+    //         .expect("Failed to create window.");
+
+    //     #[cfg(macos)]
+    //     unsafe {
+    //         let rwh = window.window_handle().expect("Failed to get window handle");
+    //         if let RawWindowHandle::AppKit(AppKitWindowHandle { ns_view, .. }) = rwh.as_ref() {
+    //             decorate_window(
+    //                 ns_view.as_ptr() as *mut AnyObject,
+    //                 LogicalPosition::new(8.0, 40.0),
+    //             );
+    //         }
+    //     }
+    //     let surface = compositor
+    //         .rendering_context
+    //         .create_surface(&window)
+    //         .unwrap();
+
+    //     let mut window = Self {
+    //         window,
+    //         cursor_state: CursorState::default(),
+    //         surface,
+    //         panel: None,
+    //         // webview: None,
+    //         event_listeners: Default::default(),
+    //         mouse_position: Default::default(),
+    //         hovering_webview: None,
+    //         modifiers_state: Cell::new(ModifiersState::default()),
+    //         resizing: false,
+    //         #[cfg(any(target_os = "macos", target_os = "windows"))]
+    //         menu_event_receiver: MenuEvent::receiver().clone(),
+    //         tab_manager: TabManager::new(),
+    //         focused_webview_id: None,
+    //         webview_menu: None,
+    //         show_bookmark: false,
+    //     };
+    //     compositor.swap_current_window(&mut window);
+    //     window
+    // }
 
     /// Get the content area size for the webview to draw on
     pub fn get_content_size(
         &self,
-        mut size: DeviceRect,
+        mut size: dpi::PhysicalSize<u32>,
         include_tab: bool,
         include_bookmark: bool,
-    ) -> DeviceRect {
+    ) -> dpi::PhysicalSize<u32> {
         if self.panel.is_some() {
             let mut height: f64 = PANEL_HEIGHT + PANEL_PADDING;
             if include_tab {
@@ -232,10 +249,11 @@ impl Window {
                 height += BOOKMARK_HEIGHT;
             }
             height *= self.scale_factor();
-            size.min.y = size.max.y.min(height as f32);
-            size.min.x += 10.0;
-            size.max.y -= 10.0;
-            size.max.x -= 10.0;
+            // size.min.y = size.max.y.min(height as f32);
+            // size.min.x += 10.0;
+            // size.max.y -= 10.0;
+            // size.max.x -= 10.0;
+            size.height -= height as u32
         }
         size
     }
@@ -243,41 +261,32 @@ impl Window {
     /// Send the constellation message to start Panel UI
     pub fn create_panel(&mut self, servo: &Servo, initial_url: url::Url) {
         let hidpi_scale_factor = Scale::new(self.scale_factor() as f32);
-        let size = self.window.inner_size();
-        let size = Size2D::new(size.width as f32, size.height as f32);
-        let size = size.to_f32() / hidpi_scale_factor;
-        let viewport_details = ViewportDetails {
-            size,
-            hidpi_scale_factor,
-        };
+        let size = self.size();
+        // let size = size.to_f32() / hidpi_scale_factor;
 
-        let url = ServoUrl::parse("verso://resources/components/panel.html").unwrap();
+        let url = url::Url::parse("verso://resources/components/panel.html").unwrap();
 
         let webview = WebViewBuilder::new(servo)
             .url(url)
             .hidpi_scale_factor(hidpi_scale_factor)
+            .size(size)
             .build();
         self.panel = Some(Panel {
             webview,
-            initial_url: ServoUrl::from_url(initial_url),
+            initial_url,
         });
     }
 
     /// Create a new webview and send the constellation message to load the initial URL
-    pub fn create_tab(&mut self, servo: &Servo, initial_url: ServoUrl) {
-        let webview_id = WebViewId::new();
-        let size = self.size().to_f32();
-        let rect = DeviceRect::from_size(size);
+    pub fn create_tab(&mut self, servo: &Servo, initial_url: url::Url) {
+        let size = self.size();
+        // let rect = DeviceRect::from_size(size);
 
         let show_tab = self.tab_manager.count() >= 1;
-        let content_size = self.get_content_size(rect, show_tab, self.show_bookmark);
+        let content_size = self.get_content_size(size, show_tab, self.show_bookmark);
 
         let hidpi_scale_factor = Scale::new(self.scale_factor() as f32);
-        let size = content_size.size().to_f32() / hidpi_scale_factor;
-        let viewport_details = ViewportDetails {
-            size,
-            hidpi_scale_factor,
-        };
+        // let size = content_size.size().to_f32() / hidpi_scale_factor;
 
         let webview = WebViewBuilder::new(servo)
             .url(initial_url)
@@ -291,12 +300,11 @@ impl Window {
                 serde_json::to_string(&webview.id()).unwrap(),
                 true,
             );
-            webview.evaluate_javascript(cmd, |_| {});
+            panel.webview.evaluate_javascript(cmd, |_| {});
         }
 
+        log::debug!("Verso Window {:?} adds webview {}", self.id(), webview.id());
         self.tab_manager.append_tab(webview, true);
-
-        log::debug!("Verso Window {:?} adds webview {}", self.id(), webview_id);
     }
 
     /// Close a tab
@@ -315,126 +323,118 @@ impl Window {
                     .evaluate_javascript(format!("{cmd}{activate_next_tab}"), |_| {});
             }
         }
-        send_to_constellation(
-            &compositor.constellation_sender,
-            EmbedderToConstellationMessage::CloseWebView(tab_id),
-        );
+        self.tab_manager.close_tab(tab_id);
     }
 
     /// Activate a tab
-    pub fn activate_tab(
-        &mut self,
-        tab_id: WebViewId,
-        show_tab: bool,
-    ) {
-        let size = self.size().to_f32();
-        let rect = DeviceRect::from_size(size);
-        let content_size = self.get_content_size(rect, show_tab, self.show_bookmark);
-        let (tab_id, prompt_id) = self.tab_manager.set_size(tab_id, content_size);
+    pub fn activate_tab(&mut self, tab_id: WebViewId, show_tab: bool) {
+        // let size = self.size().to_f32();
+        // let rect = DeviceRect::from_size(size);
+        // let content_size = self.get_content_size(rect, show_tab, self.show_bookmark);
+        // let (tab_id, prompt_id) = self.tab_manager.set_size(tab_id, content_size);
 
-        if let Some(prompt_id) = prompt_id {
-            compositor.on_resize_webview_event(prompt_id, content_size);
-        }
-        if let Some(tab_id) = tab_id {
-            compositor.on_resize_webview_event(tab_id, content_size);
+        // if let Some(prompt_id) = prompt_id {
+        //     compositor.on_resize_webview_event(prompt_id, content_size);
+        // }
+        // if let Some(tab_id) = tab_id {
+        //     compositor.on_resize_webview_event(tab_id, content_size);
 
-            let old_tab_id = self.tab_manager.current_tab_id();
-            if self.tab_manager.activate_tab(tab_id).is_some() {
-                // throttle the old tab to avoid unnecessary animation caclulations
-                if let Some(old_tab_id) = old_tab_id {
-                    let _ = compositor.constellation_sender.send(
-                        EmbedderToConstellationMessage::SetWebViewThrottled(old_tab_id, true),
-                    );
-                }
-                let _ = compositor.constellation_sender.send(
-                    EmbedderToConstellationMessage::SetWebViewThrottled(tab_id, false),
-                );
+        //     let old_tab_id = self.tab_manager.current_tab_id();
+        //     if self.tab_manager.activate_tab(tab_id).is_some() {
+        //         // throttle the old tab to avoid unnecessary animation caclulations
+        //         if let Some(old_tab_id) = old_tab_id {
+        //             let _ = compositor.constellation_sender.send(
+        //                 EmbedderToConstellationMessage::SetWebViewThrottled(old_tab_id, true),
+        //             );
+        //         }
+        //         let _ = compositor.constellation_sender.send(
+        //             EmbedderToConstellationMessage::SetWebViewThrottled(tab_id, false),
+        //         );
 
-                self.focused_webview_id = Some(tab_id);
-                let _ = compositor
-                    .constellation_sender
-                    .send(EmbedderToConstellationMessage::FocusWebView(tab_id));
+        //         self.focused_webview_id = Some(tab_id);
+        //         let _ = compositor
+        //             .constellation_sender
+        //             .send(EmbedderToConstellationMessage::FocusWebView(tab_id));
 
-                // Set navigation button enabled state
-                let history = self.tab_manager.history(tab_id).unwrap();
-                let prev_btn_enabled = history.current_idx > 0;
-                let next_btn_enabled = history.current_idx < history.list.len() - 1;
-                javascript_evaluator.evaluate_ignore_result(
-                    &compositor.constellation_sender,
-                    &self.panel.as_ref().unwrap().webview.webview_id,
-                    format!(
-                        "window.navbar.setNavBtnEnabled({}, {})",
-                        prev_btn_enabled, next_btn_enabled
-                    ),
-                );
+        //         // Set navigation button enabled state
+        //         let history = self.tab_manager.history(tab_id).unwrap();
+        //         let prev_btn_enabled = history.current_idx > 0;
+        //         let next_btn_enabled = history.current_idx < history.list.len() - 1;
+        //         javascript_evaluator.evaluate_ignore_result(
+        //             &compositor.constellation_sender,
+        //             &self.panel.as_ref().unwrap().webview.webview_id,
+        //             format!(
+        //                 "window.navbar.setNavBtnEnabled({}, {})",
+        //                 prev_btn_enabled, next_btn_enabled
+        //             ),
+        //         );
 
-                // update painting order immediately to draw the active tab
-                compositor.send_root_pipeline_display_list(self);
-            }
-        }
+        //         // update painting order immediately to draw the active tab
+        //         compositor.send_root_pipeline_display_list(self);
+        //     }
+        // }
     }
 
     /// Handle Winit window event and return a boolean to indicate if the compositor should repaint immediately.
-    pub fn handle_winit_window_event(
-        &mut self,
-        sender: &Sender<EmbedderToConstellationMessage>,
-        event: &winit::event::WindowEvent,
-    ) {
+    pub fn handle_winit_window_event(&mut self, servo: &Servo, event: &winit::event::WindowEvent) {
+        let Some(tab) = self.tab_manager.current_tab() else {
+            return;
+        };
+        let webview = tab.webview();
+
         match event {
             WindowEvent::RedrawRequested => {
-                if compositor.needs_repaint() {
-                    self.window.pre_present_notify();
-                    compositor.composite(self);
-                    if let Err(err) = compositor.rendering_context.present(&self.surface) {
-                        log::warn!("Failed to present surface: {:?}", err);
-                    }
-                }
+                self.window.pre_present_notify();
+                self.rendering_context.present();
+                // if let Err(err) = compositor.rendering_context.present(&self.surface) {
+                //     log::warn!("Failed to present surface: {:?}", err);
+                // }
             }
-            WindowEvent::Focused(focused) => {
-                if *focused {
-                    compositor.swap_current_window(self);
-                }
-            }
+            // WindowEvent::Focused(focused) => {
+            //     if *focused {
+            //         compositor.swap_current_window(self);
+            //     }
+            // }
             WindowEvent::Resized(size) => {
                 if self.window.has_focus() {
                     self.resizing = true;
                 }
-                let size = Size2D::new(size.width, size.height);
-                compositor.resize(size.to_f32(), self);
+                // let size = Size2D::new(size.width, size.height);
+                // compositor.resize(size.to_f32(), self);
             }
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                compositor.on_scale_factor_event(*scale_factor as f32, self);
+                // compositor.on_scale_factor_event(*scale_factor as f32, self);
             }
             WindowEvent::CursorEntered { .. } => {
-                compositor.swap_current_window(self);
+                // compositor.swap_current_window(self);
             }
             WindowEvent::CursorLeft { .. } => {
-                let hovering_webview = self.hovering_webview.take();
-                if let Some(hovering_webview) = hovering_webview {
-                    forward_input_event(
-                        compositor,
-                        hovering_webview,
-                        sender,
-                        InputEvent::MouseLeftViewport(MouseLeftViewportEvent::default()),
-                    );
-                }
+                // let hovering_webview = self.hovering_webview.take();
+                // if let Some(hovering_webview) = hovering_webview {
+                //     forward_input_event(
+                //         compositor,
+                //         hovering_webview,
+                //         sender,
+                //         InputEvent::MouseLeftViewport(MouseLeftViewportEvent::default()),
+                //     );
+                // }
             }
             WindowEvent::CursorMoved { position, .. } => {
                 self.mouse_position.set(Some(*position));
 
                 let point = DevicePoint::new(position.x as f32, position.y as f32);
-                let target_webview = self.forward_mouse_move(compositor, sender, point);
+                let target_webview = self.forward_mouse_move(point);
                 let last_hovering_webview = self.hovering_webview.take();
                 self.hovering_webview = target_webview;
 
                 if last_hovering_webview != target_webview {
                     if let Some(last_hovering_webview) = last_hovering_webview {
-                        forward_input_event(
-                            compositor,
-                            last_hovering_webview,
-                            sender,
-                            InputEvent::MouseLeftViewport(MouseLeftViewportEvent::default()),
-                        );
+                        // forward_input_event(
+                        //     compositor,
+                        //     last_hovering_webview,
+                        //     sender,
+                        //     InputEvent::MouseLeftViewport(MouseLeftViewportEvent::default()),
+                        // );
                     }
                 }
 
@@ -499,15 +499,12 @@ impl Window {
                     ElementState::Released => MouseButtonAction::Up,
                 };
 
-                forward_input_event(
-                    compositor,
-                    webview_id,
-                    sender,
-                    InputEvent::MouseButton(MouseButtonEvent::new(action, button, point)),
-                );
+                webview.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
+                    action, button, point,
+                )));
             }
             WindowEvent::PinchGesture { delta, .. } => {
-                compositor.on_zoom_window_event(1.0 + *delta as f32, self);
+                webview.set_pinch_zoom(*delta as f32 + 1.0);
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let point = match self.mouse_position.get() {
@@ -539,17 +536,16 @@ impl Window {
                     y = 0.0;
                 }
 
-                let phase: TouchEventType = match phase {
-                    TouchPhase::Started => TouchEventType::Down,
-                    TouchPhase::Moved => TouchEventType::Move,
-                    TouchPhase::Ended => TouchEventType::Up,
-                    TouchPhase::Cancelled => TouchEventType::Cancel,
-                };
+                // let phase: TouchEventType = match phase {
+                //     TouchPhase::Started => TouchEventType::Down,
+                //     TouchPhase::Moved => TouchEventType::Move,
+                //     TouchPhase::Ended => TouchEventType::Up,
+                //     TouchPhase::Cancelled => TouchEventType::Cancel,
+                // };
 
-                compositor.on_scroll_event(
+                webview.notify_scroll_event(
                     ScrollLocation::Delta(-LayoutVector2D::new(x as f32, y as f32)),
                     DeviceIntPoint::new(point.x as i32, point.y as i32),
-                    phase,
                 );
             }
             // Crashes at the moment, need to fully migrate the touch if we want this
@@ -580,68 +576,68 @@ impl Window {
             // }
             WindowEvent::ModifiersChanged(modifier) => self.modifiers_state.set(modifier.state()),
             WindowEvent::Ime(event) => {
-                let webview_id = match self.focused_webview_id {
-                    Some(webview_id) => webview_id,
-                    None => {
-                        log::trace!("No focused webview, skipping Ime event.");
-                        return;
-                    }
-                };
-                if !self.has_webview(webview_id) {
-                    log::trace!(
-                        "Webview {:?} doesn't exist, skipping Ime event.",
-                        webview_id
-                    );
-                    return;
-                }
+                // let webview_id = match self.focused_webview_id {
+                //     Some(webview_id) => webview_id,
+                //     None => {
+                //         log::trace!("No focused webview, skipping Ime event.");
+                //         return;
+                //     }
+                // };
+                // if !self.has_webview(webview_id) {
+                //     log::trace!(
+                //         "Webview {:?} doesn't exist, skipping Ime event.",
+                //         webview_id
+                //     );
+                //     return;
+                // }
 
-                match event {
-                    Ime::Commit(text) => {
-                        let text = text.clone();
-                        forward_input_event(
-                            compositor,
-                            webview_id,
-                            sender,
-                            InputEvent::Ime(ImeEvent::Composition(CompositionEvent {
-                                state: CompositionState::End,
-                                data: text,
-                            })),
-                        );
-                    }
-                    Ime::Enabled => {
-                        forward_input_event(
-                            compositor,
-                            webview_id,
-                            sender,
-                            InputEvent::Ime(ImeEvent::Composition(CompositionEvent {
-                                state: CompositionState::Start,
-                                data: String::new(),
-                            })),
-                        );
-                    }
-                    Ime::Preedit(text, _) => {
-                        forward_input_event(
-                            compositor,
-                            webview_id,
-                            sender,
-                            InputEvent::Ime(ImeEvent::Composition(CompositionEvent {
-                                state: CompositionState::Update,
-                                data: text.to_string(),
-                            })),
-                        );
-                    }
-                    Ime::Disabled => {
-                        forward_input_event(
-                            compositor,
-                            webview_id,
-                            sender,
-                            InputEvent::Ime(ImeEvent::Composition(CompositionEvent {
-                                state: CompositionState::End,
-                                data: String::new(),
-                            })),
-                        );
-                    }
-                }
+                // match event {
+                //     Ime::Commit(text) => {
+                //         let text = text.clone();
+                //         forward_input_event(
+                //             compositor,
+                //             webview_id,
+                //             sender,
+                //             InputEvent::Ime(ImeEvent::Composition(CompositionEvent {
+                //                 state: CompositionState::End,
+                //                 data: text,
+                //             })),
+                //         );
+                //     }
+                //     Ime::Enabled => {
+                //         forward_input_event(
+                //             compositor,
+                //             webview_id,
+                //             sender,
+                //             InputEvent::Ime(ImeEvent::Composition(CompositionEvent {
+                //                 state: CompositionState::Start,
+                //                 data: String::new(),
+                //             })),
+                //         );
+                //     }
+                //     Ime::Preedit(text, _) => {
+                //         forward_input_event(
+                //             compositor,
+                //             webview_id,
+                //             sender,
+                //             InputEvent::Ime(ImeEvent::Composition(CompositionEvent {
+                //                 state: CompositionState::Update,
+                //                 data: text.to_string(),
+                //             })),
+                //         );
+                //     }
+                //     Ime::Disabled => {
+                //         forward_input_event(
+                //             compositor,
+                //             webview_id,
+                //             sender,
+                //             InputEvent::Ime(ImeEvent::Composition(CompositionEvent {
+                //                 state: CompositionState::End,
+                //                 data: String::new(),
+                //             })),
+                //         );
+                //     }
+                // }
             }
             WindowEvent::KeyboardInput { event, .. } => {
                 let webview_id = match self.focused_webview_id {
@@ -661,24 +657,21 @@ impl Window {
                 let event = keyboard_event_from_winit(event, self.modifiers_state.get());
                 log::trace!("Verso is handling {:?}", event);
 
+                drop(webview);
                 /* Window operation keyboard shortcut */
-                if self.handle_keyboard_shortcut(compositor, &event.event) {
+                if self.handle_keyboard_shortcut(servo, &event.event) {
                     return;
                 }
-                forward_input_event(compositor, webview_id, sender, InputEvent::Keyboard(event));
+                let webview = self.tab_manager.current_tab().unwrap().webview();
+                webview.notify_input_event(InputEvent::Keyboard(event));
             }
             WindowEvent::ThemeChanged(theme) => {
                 let theme = to_servo_theme(Some(theme));
-                for webview_id in self.tab_manager.tab_ids() {
-                    let _ = sender.send(EmbedderToConstellationMessage::ThemeChange(
-                        webview_id, theme,
-                    ));
+                for tab in self.tab_manager.tabs() {
+                    tab.webview().notify_theme_change(theme);
                 }
                 if let Some(panel) = &self.panel {
-                    let _ = sender.send(EmbedderToConstellationMessage::ThemeChange(
-                        panel.webview.webview_id,
-                        theme,
-                    ));
+                    panel.webview.notify_theme_change(theme);
                 }
             }
             e => log::trace!("Verso Window isn't supporting this window event yet: {e:?}"),
@@ -688,7 +681,7 @@ impl Window {
     /// Handle Window keyboard shortcut
     ///
     /// - Returns `true` if the event is handled, then we should skip sending it to constellation
-    fn handle_keyboard_shortcut(&mut self, event: &KeyboardEvent) -> bool {
+    fn handle_keyboard_shortcut(&mut self, servo: &Servo, event: &KeyboardEvent) -> bool {
         let is_macos = cfg!(target_os = "macos");
         let control_or_meta = if is_macos {
             Modifiers::META
@@ -700,15 +693,12 @@ impl Window {
             // TODO: New Window, Close Browser
             match (event.modifiers, event.code) {
                 (modifiers, Code::KeyT) if modifiers == control_or_meta => {
-                    (*self).create_tab(
-                        &compositor.constellation_sender,
-                        ServoUrl::parse("https://example.com").unwrap(),
-                    );
+                    (*self).create_tab(servo, url::Url::parse("https://example.com").unwrap());
                     return true;
                 }
                 (modifiers, Code::KeyW) if modifiers == control_or_meta => {
                     if let Some(tab_id) = self.tab_manager.current_tab_id() {
-                        (*self).close_tab(compositor, tab_id);
+                        (*self).close_tab(tab_id);
                     }
                     return true;
                 }
@@ -835,9 +825,8 @@ impl Window {
     }
 
     /// Size of the window that's used by webrender.
-    pub fn size(&self) -> DeviceSize {
-        let size = self.window.inner_size();
-        Size2D::new(size.width as f32, size.height as f32)
+    pub fn size(&self) -> dpi::PhysicalSize<u32> {
+        self.window.inner_size()
     }
 
     /// Size of the window, including the window decorations.
@@ -1084,12 +1073,7 @@ impl Window {
 
     /// Forward mouse move event to the first webview under the position,
     /// returns the [`WebViewId`] of that webview
-    fn forward_mouse_move(
-        &self,
-        compositor: &mut IOCompositor,
-        sender: &Sender<EmbedderToConstellationMessage>,
-        point: Point2D<f32, DevicePixel>,
-    ) -> Option<WebViewId> {
+    fn forward_mouse_move(&self, point: DevicePoint) -> Option<WebViewId> {
         for webview in [
             &self.tab_manager.current_tab().map(|tab| tab.webview()),
             &self.panel.as_ref().map(|panel| &panel.webview),
@@ -1097,18 +1081,13 @@ impl Window {
         .into_iter()
         .filter_map(|webview| *webview)
         {
-            if !webview.rect.contains(point) {
+            if !webview.rect().contains(point) {
                 continue;
             }
 
-            forward_input_event(
-                compositor,
-                webview.webview_id,
-                sender,
-                InputEvent::MouseMove(MouseMoveEvent::new(point)),
-            );
+            webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(point)));
 
-            return Some(webview.webview_id);
+            return Some(webview.id());
         }
 
         None
@@ -1264,23 +1243,6 @@ pub unsafe fn decorate_window(view: *mut AnyObject, _position: LogicalPosition<f
             | NSWindowStyleMask::Resizable
             | NSWindowStyleMask::Miniaturizable,
     );
-}
-
-/// Forward input event to compositor or constellation.
-fn forward_input_event(
-    webview_id: WebViewId,
-    constellation_proxy: &Sender<EmbedderToConstellationMessage>,
-    event: InputEvent,
-) {
-    // Events with a `point` first go to the compositor for hit testing.
-    if event.point().is_some() {
-        compositor.on_input_event(webview_id, event);
-        return;
-    }
-
-    let _ = constellation_proxy.send(EmbedderToConstellationMessage::ForwardInputEvent(
-        webview_id, event, None, /* hit_test */
-    ));
 }
 
 fn to_servo_theme(theme: Option<&winit::window::Theme>) -> embedder_traits::Theme {

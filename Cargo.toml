@@ -83,6 +83,7 @@ env_logger = "0.11"
 euclid = "0.22"
 getopts = "0.2.17"
 gleam = "0.15"
+glow = "0.16"
 glutin = "0.32.0"
 glutin-winit = "0.5.0"
 ipc-channel = { workspace = true }
@@ -105,8 +106,7 @@ mime = "0.3"
 uuid = { workspace = true }
 rfd = "0.15"
 bitflags = "2.9"
-rustc-hash = "2.1.1"
-image = { version = "0.25", default-features = false }
+surfman = { version = "0.10.0", features = ["chains"] }
 # Servo repo crates
 libservo = { git = "https://github.com/servo/servo.git", rev = "e3aaf74" }
 background_hang_monitor = { git = "https://github.com/servo/servo.git", rev = "e3aaf74" }
@@ -135,7 +135,7 @@ webdriver_server = { git = "https://github.com/servo/servo.git", rev = "e3aaf74"
 # Servo org crates
 servo-media = { git = "https://github.com/servo/media" }
 servo-media-dummy = { git = "https://github.com/servo/media" }
-webrender_api = { git = "https://github.com/servo/webrender", branch = "0.67" }
+webrender_api = { git = "https://github.com/servo/webrender", branch = "0.68" }
 # Packager feature
 cargo-packager-resource-resolver = { version = "0.1.1", features = [
   "auto-detect-format",
