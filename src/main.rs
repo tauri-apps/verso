@@ -1,6 +1,8 @@
 // Prevent console window from appearing on Windows
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+use std::rc::Rc;
+
 use versoview::verso::EventLoopProxyMessage;
 use versoview::{Result, Verso};
 use winit::application::ApplicationHandler;
@@ -8,7 +10,7 @@ use winit::event_loop::{self, DeviceEvents};
 use winit::event_loop::{EventLoop, EventLoopProxy};
 
 struct App {
-    verso: Option<Verso>,
+    verso: Option<Rc<Verso>>,
     proxy: EventLoopProxy<EventLoopProxyMessage>,
 }
 

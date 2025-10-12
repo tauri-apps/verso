@@ -48,6 +48,7 @@ use winit::{
 };
 
 use crate::{
+    Verso,
     bookmark::BookmarkManager,
     keyboard::keyboard_event_from_winit,
     tab::TabManager,
@@ -259,17 +260,18 @@ impl Window {
     }
 
     /// Send the constellation message to start Panel UI
-    pub fn create_panel(&mut self, servo: &Servo, initial_url: url::Url) {
+    pub fn create_panel(&mut self, verso: &Rc<Verso>, initial_url: url::Url) {
         let hidpi_scale_factor = Scale::new(self.scale_factor() as f32);
         let size = self.size();
         // let size = size.to_f32() / hidpi_scale_factor;
 
         let url = url::Url::parse("verso://resources/components/panel.html").unwrap();
 
-        let webview = WebViewBuilder::new(servo)
+        let webview = WebViewBuilder::new(&verso.servo)
             .url(url)
             .hidpi_scale_factor(hidpi_scale_factor)
             .size(size)
+            .delegate(verso.clone())
             .build();
         self.panel = Some(Panel {
             webview,
@@ -278,7 +280,7 @@ impl Window {
     }
 
     /// Create a new webview and send the constellation message to load the initial URL
-    pub fn create_tab(&mut self, servo: &Servo, initial_url: url::Url) {
+    pub fn create_tab(&mut self, verso: &Rc<Verso>, initial_url: url::Url) {
         let size = self.size();
         // let rect = DeviceRect::from_size(size);
 
@@ -288,10 +290,11 @@ impl Window {
         let hidpi_scale_factor = Scale::new(self.scale_factor() as f32);
         // let size = content_size.size().to_f32() / hidpi_scale_factor;
 
-        let webview = WebViewBuilder::new(servo)
+        let webview = WebViewBuilder::new(&verso.servo)
             .url(initial_url)
             .hidpi_scale_factor(hidpi_scale_factor)
             .size(content_size)
+            .delegate(verso.clone())
             .build();
 
         if let Some(panel) = &self.panel {
@@ -376,7 +379,11 @@ impl Window {
     }
 
     /// Handle Winit window event and return a boolean to indicate if the compositor should repaint immediately.
-    pub fn handle_winit_window_event(&mut self, servo: &Servo, event: &winit::event::WindowEvent) {
+    pub fn handle_winit_window_event(
+        &mut self,
+        verso: &Rc<Verso>,
+        event: &winit::event::WindowEvent,
+    ) {
         let Some(tab) = self.tab_manager.current_tab() else {
             return;
         };
@@ -476,14 +483,6 @@ impl Window {
                 }
 
                 /* handle mouse events */
-
-                let webview_id = match self.focused_webview_id {
-                    Some(webview_id) => webview_id,
-                    None => {
-                        log::trace!("No focused webview, skipping MouseInput event.");
-                        return;
-                    }
-                };
 
                 let button: MouseButton = match button {
                     winit::event::MouseButton::Left => MouseButton::Left,
@@ -659,7 +658,7 @@ impl Window {
 
                 drop(webview);
                 /* Window operation keyboard shortcut */
-                if self.handle_keyboard_shortcut(servo, &event.event) {
+                if self.handle_keyboard_shortcut(verso, &event.event) {
                     return;
                 }
                 let webview = self.tab_manager.current_tab().unwrap().webview();
@@ -681,7 +680,7 @@ impl Window {
     /// Handle Window keyboard shortcut
     ///
     /// - Returns `true` if the event is handled, then we should skip sending it to constellation
-    fn handle_keyboard_shortcut(&mut self, servo: &Servo, event: &KeyboardEvent) -> bool {
+    fn handle_keyboard_shortcut(&mut self, verso: &Rc<Verso>, event: &KeyboardEvent) -> bool {
         let is_macos = cfg!(target_os = "macos");
         let control_or_meta = if is_macos {
             Modifiers::META
@@ -693,7 +692,7 @@ impl Window {
             // TODO: New Window, Close Browser
             match (event.modifiers, event.code) {
                 (modifiers, Code::KeyT) if modifiers == control_or_meta => {
-                    (*self).create_tab(servo, url::Url::parse("https://example.com").unwrap());
+                    (*self).create_tab(verso, url::Url::parse("https://example.com").unwrap());
                     return true;
                 }
                 (modifiers, Code::KeyW) if modifiers == control_or_meta => {
