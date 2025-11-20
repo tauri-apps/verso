@@ -1,4 +1,4 @@
-use std::{cell::Cell, collections::HashMap, rc::Rc};
+use std::{cell::Cell, collections::HashMap, ops::Deref, rc::Rc};
 
 use base::{generic_channel::GenericSender, id::WebViewId};
 use constellation_traits::EmbedderToConstellationMessage;
@@ -26,7 +26,9 @@ use notify_rust::Image;
 #[cfg(target_os = "macos")]
 use raw_window_handle::HasWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
-use servo::{RenderingContext, Servo, WebViewBuilder, WindowRenderingContext};
+use servo::{
+    LoadStatus, RenderingContext, Servo, WebViewBuilder, WebViewDelegate, WindowRenderingContext,
+};
 use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
 use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
@@ -53,7 +55,7 @@ use crate::{
     keyboard::keyboard_event_from_winit,
     tab::TabManager,
     verso::send_to_constellation,
-    webview::{Panel, WebView, prompt::PromptSender, webview_menu::WebViewMenu},
+    webview::{Panel, prompt::PromptSender, webview_menu::WebViewMenu},
 };
 
 use arboard::Clipboard;
@@ -113,6 +115,65 @@ pub struct Window {
     pub(crate) webview_menu: Option<Box<dyn WebViewMenu>>,
     /// Show the bookmark bar or not
     pub show_bookmark: bool,
+}
+
+macro_rules! window {
+    ($self:ident) => {
+        $self.verso.windows.borrow().get(&$self.window_id).unwrap()
+    };
+}
+
+macro_rules! window_mut {
+    ($self:ident) => {
+        $self
+            .verso
+            .windows
+            .borrow_mut()
+            .get_mut(&$self.window_id)
+            .unwrap()
+    };
+}
+struct WindowWebViewDelegate {
+    verso: Rc<Verso>,
+    window_id: WindowId,
+}
+
+impl WebViewDelegate for WindowWebViewDelegate {
+    fn notify_closed(&self, webview: servo::WebView) {
+        self.verso
+            .windows
+            .borrow_mut()
+            .get_mut(&self.window_id)
+            .unwrap()
+            .close_tab(webview.id());
+    }
+}
+
+struct PanelWebViewDelegate(WindowWebViewDelegate);
+
+impl Deref for PanelWebViewDelegate {
+    type Target = WindowWebViewDelegate;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl WebViewDelegate for PanelWebViewDelegate {
+    fn notify_load_status_changed(&self, webview: servo::WebView, status: servo::LoadStatus) {
+        match status {
+            LoadStatus::Started | LoadStatus::HeadParsed => {
+                webview.notify_theme_change(to_servo_theme(window!(self).window.theme().as_ref()));
+            }
+            LoadStatus::Complete => {
+                window!(self).window.request_redraw();
+                window_mut!(self).create_tab(
+                    &self.verso,
+                    window!(self).panel.as_ref().unwrap().initial_url.clone(),
+                );
+            }
+        }
+    }
 }
 
 impl Window {
@@ -265,13 +326,15 @@ impl Window {
         let size = self.size();
         // let size = size.to_f32() / hidpi_scale_factor;
 
-        let url = url::Url::parse("verso://resources/components/panel.html").unwrap();
-
+        let delegate = PanelWebViewDelegate(WindowWebViewDelegate {
+            verso: verso.clone(),
+            window_id: self.id(),
+        });
         let webview = WebViewBuilder::new(&verso.servo)
-            .url(url)
+            .url(url::Url::parse("verso://resources/components/panel.html").unwrap())
             .hidpi_scale_factor(hidpi_scale_factor)
             .size(size)
-            .delegate(verso.clone())
+            .delegate(Rc::new(delegate))
             .build();
         self.panel = Some(Panel {
             webview,
@@ -290,11 +353,15 @@ impl Window {
         let hidpi_scale_factor = Scale::new(self.scale_factor() as f32);
         // let size = content_size.size().to_f32() / hidpi_scale_factor;
 
+        let delegate = WindowWebViewDelegate {
+            verso: verso.clone(),
+            window_id: self.id(),
+        };
         let webview = WebViewBuilder::new(&verso.servo)
             .url(initial_url)
             .hidpi_scale_factor(hidpi_scale_factor)
             .size(content_size)
-            .delegate(verso.clone())
+            .delegate(Rc::new(delegate))
             .build();
 
         if let Some(panel) = &self.panel {
@@ -778,43 +845,43 @@ impl Window {
             _ => {}
         }
 
-        // Handle message in Verso Panel
-        if let Some(panel) = &self.panel {
-            if panel.webview.webview_id == webview_id {
-                return self.handle_servo_messages_with_panel(
-                    webview_id,
-                    message,
-                    sender,
-                    clipboard,
-                    compositor,
-                    bookmark_manager,
-                );
-            }
-        }
-        if let Some(webview_menu) = &self.webview_menu {
-            if webview_menu.webview().webview_id == webview_id {
-                self.handle_servo_messages_with_webview_menu(
-                    webview_id, message, sender, clipboard, compositor,
-                );
-                return false;
-            }
-        }
-        if self.tab_manager.has_prompt(webview_id) {
-            self.handle_servo_messages_with_prompt(
-                webview_id, message, sender, clipboard, compositor,
-            );
-            return false;
-        }
+        // // Handle message in Verso Panel
+        // if let Some(panel) = &self.panel {
+        //     if panel.webview.webview_id == webview_id {
+        //         return self.handle_servo_messages_with_panel(
+        //             webview_id,
+        //             message,
+        //             sender,
+        //             clipboard,
+        //             compositor,
+        //             bookmark_manager,
+        //         );
+        //     }
+        // }
+        // if let Some(webview_menu) = &self.webview_menu {
+        //     if webview_menu.webview().webview_id == webview_id {
+        //         self.handle_servo_messages_with_webview_menu(
+        //             webview_id, message, sender, clipboard, compositor,
+        //         );
+        //         return false;
+        //     }
+        // }
+        // if self.tab_manager.has_prompt(webview_id) {
+        //     self.handle_servo_messages_with_prompt(
+        //         webview_id, message, sender, clipboard, compositor,
+        //     );
+        //     return false;
+        // }
 
         // Handle message in Verso WebView
-        self.handle_servo_messages_with_webview(
-            webview_id,
-            message,
-            sender,
-            to_controller_sender,
-            clipboard,
-            compositor,
-        );
+        // self.handle_servo_messages_with_webview(
+        //     webview_id,
+        //     message,
+        //     sender,
+        //     to_controller_sender,
+        //     clipboard,
+        //     compositor,
+        // );
         false
     }
 
@@ -859,7 +926,7 @@ impl Window {
         }
 
         if let Some(panel) = &self.panel {
-            if panel.webview.webview_id == id {
+            if panel.webview.id() == id {
                 return true;
             }
         }
@@ -869,75 +936,6 @@ impl Window {
         }
 
         false
-    }
-
-    /// Remove the webview in this window by provided webview ID.
-    /// If provided ID is the panel, it will shut down the compositor and then close whole application.
-    pub fn remove_webview(
-        &mut self,
-        id: WebViewId,
-        compositor: &mut IOCompositor,
-    ) -> (Option<WebView>, bool) {
-        if self
-            .webview_menu
-            .as_ref()
-            .filter(|menu| menu.webview().webview_id == id)
-            .is_some()
-        {
-            let webview_menu = self.webview_menu.take().expect("Context menu should exist");
-            return (Some(webview_menu.webview().clone()), false);
-        }
-
-        if let Some(prompt) = self.tab_manager.remove_prompt_by_prompt_id(id) {
-            return (Some(prompt.webview().clone()), false);
-        }
-
-        if self
-            .panel
-            .as_ref()
-            .filter(|w| w.webview.webview_id == id)
-            .is_some()
-        {
-            // Removing panel, remove all webviews and shut down the compositor
-            let tab_ids = self.tab_manager.tab_ids();
-            for tab_id in tab_ids {
-                send_to_constellation(
-                    &compositor.constellation_sender,
-                    EmbedderToConstellationMessage::CloseWebView(tab_id),
-                );
-            }
-            (self.panel.take().map(|panel| panel.webview), false)
-        } else if let Ok(tab) = self.tab_manager.close_tab(id) {
-            let close_window = self.tab_manager.count() == 0 || self.panel.is_none();
-            if self.focused_webview_id == Some(id) {
-                self.focused_webview_id = None;
-            }
-            (Some(tab.webview().clone()), close_window)
-        } else {
-            (None, false)
-        }
-    }
-
-    /// Get the painting order of this window.
-    pub fn painting_order(&self) -> Vec<&WebView> {
-        let mut order = vec![];
-        if let Some(panel) = &self.panel {
-            order.push(&panel.webview);
-        }
-
-        if let Some(tab) = self.tab_manager.current_tab() {
-            order.push(tab.webview());
-        }
-
-        if let Some(webview_menu) = &self.webview_menu {
-            order.push(webview_menu.webview());
-        }
-
-        if let Some(prompt) = self.tab_manager.current_prompt() {
-            order.push(prompt.webview());
-        }
-
-        order
     }
 
     /// Set cursor icon of the window.
@@ -1054,20 +1052,6 @@ impl Window {
         if let Some(menu) = self.webview_menu.as_mut() {
             menu.close(sender);
         }
-    }
-
-    pub(crate) fn notify_theme_change(
-        &self,
-        constellation_sender: &Sender<EmbedderToConstellationMessage>,
-        webview_id: WebViewId,
-    ) {
-        send_to_constellation(
-            constellation_sender,
-            EmbedderToConstellationMessage::ThemeChange(
-                webview_id,
-                to_servo_theme(self.window.theme().as_ref()),
-            ),
-        );
     }
 
     /// Forward mouse move event to the first webview under the position,

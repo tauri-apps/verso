@@ -1,6 +1,6 @@
 mod webview;
 /// WebView
-pub use webview::{Panel, WebView};
+pub use webview::Panel;
 /// Context Menu
 pub mod context_menu;
 /// Browsing history menu
