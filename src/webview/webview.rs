@@ -19,8 +19,8 @@ use crate::{
     tab::{TabActivateRequest, TabCloseRequest, TabCreateResponse},
     verso::send_to_constellation,
     webview::{
-        history_menu::{HistoryMenuUIResponse, OpenHistoryMenuRequest},
-        prompt::{HttpBasicAuthInputResult, PromptDialog, PromptInputResult, PromptSender},
+        // history_menu::{HistoryMenuUIResponse, OpenHistoryMenuRequest},
+        // prompt::{HttpBasicAuthInputResult, PromptDialog, PromptInputResult, PromptSender},
     },
     window::Window,
 };

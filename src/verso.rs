@@ -354,7 +354,7 @@ impl Verso {
 
     /// Handle message came from webview controller.
     pub fn handle_incoming_webview_message(
-        &mut self,
+        self: &mut Rc<Self>,
         event_loop: &ActiveEventLoop,
         message: ToVersoMessage,
     ) {

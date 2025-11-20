@@ -55,7 +55,10 @@ use crate::{
     keyboard::keyboard_event_from_winit,
     tab::TabManager,
     verso::send_to_constellation,
-    webview::{Panel, prompt::PromptSender, webview_menu::WebViewMenu},
+    webview::{
+        Panel,
+        // prompt::PromptSender, webview_menu::WebViewMenu
+    },
 };
 
 use arboard::Clipboard;
@@ -111,8 +114,8 @@ pub struct Window {
     /// Window tabs manager
     pub(crate) tab_manager: TabManager,
     pub(crate) focused_webview_id: Option<WebViewId>,
-    /// Window-wide menu. e.g. context menu(Wayland) and browsing history menu.
-    pub(crate) webview_menu: Option<Box<dyn WebViewMenu>>,
+    // /// Window-wide menu. e.g. context menu(Wayland) and browsing history menu.
+    // pub(crate) webview_menu: Option<Box<dyn WebViewMenu>>,
     /// Show the bookmark bar or not
     pub show_bookmark: bool,
 }
@@ -243,7 +246,7 @@ impl Window {
             menu_event_receiver: MenuEvent::receiver().clone(),
             tab_manager: TabManager::new(),
             focused_webview_id: None,
-            webview_menu: None,
+            // webview_menu: None,
             show_bookmark: false,
         }
     }
@@ -530,13 +533,13 @@ impl Window {
                     }
                 };
 
-                /* handle context menu */
-                if let (ElementState::Pressed, winit::event::MouseButton::Right) = (state, button) {
-                    let prompt = self.tab_manager.current_prompt();
-                    if prompt.is_some() {
-                        return;
-                    }
-                }
+                // /* handle context menu */
+                // if let (ElementState::Pressed, winit::event::MouseButton::Right) = (state, button) {
+                //     let prompt = self.tab_manager.current_prompt();
+                //     if prompt.is_some() {
+                //         return;
+                //     }
+                // }
 
                 /* handle Windows and Linux non-decoration window resize */
                 #[cfg(any(linux, target_os = "windows"))]
@@ -913,17 +916,17 @@ impl Window {
 
     /// Check if the window has such webview.
     pub fn has_webview(&self, id: WebViewId) -> bool {
-        if self
-            .webview_menu
-            .as_ref()
-            .is_some_and(|w| w.webview().webview_id == id)
-        {
-            return true;
-        }
+        // if self
+        //     .webview_menu
+        //     .as_ref()
+        //     .is_some_and(|w| w.webview().webview_id == id)
+        // {
+        //     return true;
+        // }
 
-        if self.tab_manager.has_prompt(id) {
-            return true;
-        }
+        // if self.tab_manager.has_prompt(id) {
+        //     return true;
+        // }
 
         if let Some(panel) = &self.panel {
             if panel.webview.id() == id {
@@ -1047,12 +1050,12 @@ impl Window {
         let _ = display_notification.show();
     }
 
-    /// Close window's webview menu
-    pub(crate) fn close_webview_menu(&mut self, sender: &Sender<EmbedderToConstellationMessage>) {
-        if let Some(menu) = self.webview_menu.as_mut() {
-            menu.close(sender);
-        }
-    }
+    // /// Close window's webview menu
+    // pub(crate) fn close_webview_menu(&mut self, sender: &Sender<EmbedderToConstellationMessage>) {
+    //     if let Some(menu) = self.webview_menu.as_mut() {
+    //         menu.close(sender);
+    //     }
+    // }
 
     /// Forward mouse move event to the first webview under the position,
     /// returns the [`WebViewId`] of that webview
@@ -1079,32 +1082,32 @@ impl Window {
 
 // Prompt methods
 impl Window {
-    /// Close window's prompt dialog
-    pub(crate) fn close_prompt_dialog(&mut self, tab_id: WebViewId) {
-        if let Some(sender) = self
-            .tab_manager
-            .remove_prompt_by_tab_id(tab_id)
-            .and_then(|prompt| prompt.sender())
-        {
-            match sender {
-                PromptSender::AlertSender(sender) => {
-                    let _ = sender.send(AlertResponse::default());
-                }
-                PromptSender::ConfirmSender(sender) => {
-                    let _ = sender.send(ConfirmResponse::default());
-                }
-                PromptSender::InputSender(sender) => {
-                    let _ = sender.send(PromptResponse::default());
-                }
-                PromptSender::AllowDenySender(sender) => {
-                    let _ = sender.send(AllowOrDeny::Deny);
-                }
-                PromptSender::HttpBasicAuthSender(sender) => {
-                    let _ = sender.send(None);
-                }
-            }
-        }
-    }
+    // /// Close window's prompt dialog
+    // pub(crate) fn close_prompt_dialog(&mut self, tab_id: WebViewId) {
+    //     if let Some(sender) = self
+    //         .tab_manager
+    //         .remove_prompt_by_tab_id(tab_id)
+    //         .and_then(|prompt| prompt.sender())
+    //     {
+    //         match sender {
+    //             PromptSender::AlertSender(sender) => {
+    //                 let _ = sender.send(AlertResponse::default());
+    //             }
+    //             PromptSender::ConfirmSender(sender) => {
+    //                 let _ = sender.send(ConfirmResponse::default());
+    //             }
+    //             PromptSender::InputSender(sender) => {
+    //                 let _ = sender.send(PromptResponse::default());
+    //             }
+    //             PromptSender::AllowDenySender(sender) => {
+    //                 let _ = sender.send(AllowOrDeny::Deny);
+    //             }
+    //             PromptSender::HttpBasicAuthSender(sender) => {
+    //                 let _ = sender.send(None);
+    //             }
+    //         }
+    //     }
+    // }
 }
 
 // Non-decorated window resizing for Windows and Linux.
