@@ -492,7 +492,7 @@ impl ResourceReaderMethods for ResourceReader {
             match resource {
                 // Rigppy image is the only one needs to be valid bytes.
                 // Others can be empty and Servo will set to default.
-                Resource::RippyPNG => &include_bytes!("../resources/rippy.png")[..],
+                Resource::BrokenImageIcon => &include_bytes!("../resources/rippy.png")[..],
                 Resource::HstsPreloadList => {
                     log::warn!(
                         "HSTS preload list not found, falling back to an empty list, to set this, put the list at '{}'",

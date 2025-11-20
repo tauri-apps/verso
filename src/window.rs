@@ -10,11 +10,6 @@ use embedder_traits::{
     WebResourceResponseMsg, WheelMode,
 };
 use euclid::{Point2D, Scale, Size2D};
-use glutin::{
-    config::{ConfigTemplateBuilder, GlConfig},
-    surface::{Surface, WindowSurface},
-};
-use glutin_winit::DisplayBuilder;
 use ipc_channel::ipc::IpcSender;
 use keyboard_types::{
     Code, CompositionEvent, CompositionState, KeyState, KeyboardEvent, Modifiers,
@@ -27,7 +22,8 @@ use notify_rust::Image;
 use raw_window_handle::HasWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use servo::{
-    LoadStatus, RenderingContext, Servo, WebViewBuilder, WebViewDelegate, WindowRenderingContext,
+    LoadStatus, RenderingContext, Scroll, Servo, WebViewBuilder, WebViewDelegate,
+    WindowRenderingContext,
 };
 use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
 use servo_url::ServoUrl;
@@ -36,7 +32,7 @@ use webrender_api::{
     ScrollLocation,
     units::{
         DeviceIntPoint, DeviceIntRect, DevicePixel, DevicePoint, DeviceRect, DeviceSize,
-        LayoutVector2D,
+        DeviceVector2D, LayoutVector2D,
     },
 };
 #[cfg(any(linux, target_os = "windows"))]
@@ -526,7 +522,7 @@ impl Window {
             }
             WindowEvent::MouseInput { state, button, .. } => {
                 let point = match self.mouse_position.get() {
-                    Some(point) => Point2D::new(point.x as f32, point.y as f32),
+                    Some(point) => DevicePoint::new(point.x as f32, point.y as f32),
                     None => {
                         log::trace!("Mouse position is None, skipping MouseInput event.");
                         return;
@@ -569,11 +565,17 @@ impl Window {
                 };
 
                 webview.notify_input_event(InputEvent::MouseButton(MouseButtonEvent::new(
-                    action, button, point,
+                    action,
+                    button,
+                    point.into(),
                 )));
             }
             WindowEvent::PinchGesture { delta, .. } => {
-                webview.set_pinch_zoom(*delta as f32 + 1.0);
+                let center = self.mouse_position.get().unwrap_or_default();
+                webview.pinch_zoom(
+                    *delta as f32 + 1.0,
+                    Point2D::new(center.x as f32, center.y as f32),
+                );
             }
             WindowEvent::MouseWheel { delta, phase, .. } => {
                 let point = match self.mouse_position.get() {
@@ -587,7 +589,7 @@ impl Window {
                 // FIXME: Pixels per line, should be configurable (from browser setting?) and vary by zoom level.
                 const LINE_HEIGHT: f32 = 38.0;
 
-                let (mut x, mut y, _mode) = match delta {
+                let (mut dx, mut dy, _mode) = match delta {
                     winit::event::MouseScrollDelta::LineDelta(x, y) => {
                         (*x as f64, (*y * LINE_HEIGHT) as f64, WheelMode::DeltaLine)
                     }
@@ -599,10 +601,10 @@ impl Window {
 
                 // Scroll Event
                 // Do one axis at a time.
-                if y.abs() >= x.abs() {
-                    x = 0.0;
+                if dy.abs() >= dx.abs() {
+                    dx = 0.0;
                 } else {
-                    y = 0.0;
+                    dy = 0.0;
                 }
 
                 // let phase: TouchEventType = match phase {
@@ -611,11 +613,9 @@ impl Window {
                 //     TouchPhase::Ended => TouchEventType::Up,
                 //     TouchPhase::Cancelled => TouchEventType::Cancel,
                 // };
-
-                webview.notify_scroll_event(
-                    ScrollLocation::Delta(-LayoutVector2D::new(x as f32, y as f32)),
-                    DeviceIntPoint::new(point.x as i32, point.y as i32),
-                );
+                let scroll = Scroll::Delta(DeviceVector2D::new(dx as f32, dy as f32).into());
+                let point = DevicePoint::new(point.x as f32, point.y as f32).into();
+                webview.notify_scroll_event(scroll, point);
             }
             // Crashes at the moment, need to fully migrate the touch if we want this
             // WindowEvent::Touch(touch) => {
@@ -1071,7 +1071,7 @@ impl Window {
                 continue;
             }
 
-            webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(point)));
+            webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(point.into())));
 
             return Some(webview.id());
         }

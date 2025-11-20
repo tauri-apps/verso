@@ -12,10 +12,8 @@ pub mod errors;
 
 /// Utilities to handle keyboard inputs and states.
 pub mod keyboard;
-/// Verso's rendering context.
-pub mod rendering;
-/// Utilities to handle touch inputs and states.
-pub mod touch;
+// /// Verso's rendering context.
+// pub mod rendering;
 /// Main entry types and functions.
 pub mod verso;
 /// Web view types to handle web browsing contexts.

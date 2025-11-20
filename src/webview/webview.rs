@@ -3,7 +3,7 @@ use base::id::WebViewId;
 use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 use crossbeam_channel::Sender;
 use embedder_traits::{
-    AlertResponse, AllowOrDeny, ConfirmResponse, ContextMenuResult, EmbedderMsg, LoadStatus,
+    AlertResponse, AllowOrDeny, ConfirmResponse, EmbedderMsg, LoadStatus,
     PromptResponse, SimpleDialog, TraversalId, ViewportDetails,
 };
 use euclid::Scale;

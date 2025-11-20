@@ -6,8 +6,8 @@ use base::{
     id::{PipelineNamespace, PipelineNamespaceId, WebViewId},
 };
 use compositing_traits::{
-    CompositorMsg, CompositorProxy, CrossProcessCompositorApi, WebrenderExternalImageHandlers,
-    WebrenderImageHandlerType,
+    CompositorMsg, CompositorProxy, CrossProcessCompositorApi, WebRenderExternalImageHandlers,
+    WebRenderImageHandlerType,
 };
 use constellation::{Constellation, FromEmbedderLogger, InitialConstellationState};
 use constellation_traits::EmbedderToConstellationMessage;
@@ -270,7 +270,6 @@ impl Verso {
             EmbedderMsg::ResizeTo(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShowSimpleDialog(webview_id, ..) => Some(webview_id),
             EmbedderMsg::RequestAuthentication(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::ShowContextMenu(webview_id, ..) => Some(webview_id),
             EmbedderMsg::AllowNavigationRequest(webview_id, ..) => Some(webview_id),
             EmbedderMsg::AllowOpeningWebView(webview_id, ..) => Some(webview_id),
             EmbedderMsg::WebViewClosed(webview_id) => Some(webview_id),
@@ -288,10 +287,10 @@ impl Verso {
             EmbedderMsg::WebResourceRequested(opt_webview_id, ..) => opt_webview_id.as_ref(),
             EmbedderMsg::Panic(webview_id, ..) => Some(webview_id),
             EmbedderMsg::GetSelectedBluetoothDevice(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::SelectFiles(webview_id, ..) => Some(webview_id),
+            EmbedderMsg::SelectFiles(embedder_control_id, ..) => {
+                Some(&embedder_control_id.webview_id)
+            }
             EmbedderMsg::PromptPermission(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::ShowIME(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::HideIME(webview_id) => Some(webview_id),
             EmbedderMsg::ReportProfile(..) => None,
             EmbedderMsg::MediaSessionEvent(webview_id, ..) => Some(webview_id),
             EmbedderMsg::OnDevtoolsStarted(..) => None,
@@ -306,6 +305,9 @@ impl Verso {
             EmbedderMsg::GetScreenMetrics(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShowEmbedderControl(..) => None,
             EmbedderMsg::InputEventHandled(webview_id, ..) => Some(webview_id),
+            EmbedderMsg::HideEmbedderControl(embedder_control_id) => {
+                Some(&embedder_control_id.webview_id)
+            }
         }
     }
 
