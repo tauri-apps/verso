@@ -551,7 +551,7 @@ impl ProtocolHandler for ResourceReader {
                 }
             }
 
-            *response.body.lock().unwrap() = ResponseBody::Done(file);
+            *response.body.lock() = ResponseBody::Done(file);
 
             response
         } else {
