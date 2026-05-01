@@ -8,7 +8,7 @@ use embedder_traits::resources::{self, Resource, ResourceReaderMethods};
 //use embedder_traits::user_content_manager::UserScript as ServoUserScript;
 use headers::{ContentType, HeaderMapExt};
 use net::protocols::{ProtocolHandler, ProtocolRegistry};
-use net_traits::{ResourceFetchTiming, response::ResponseBody};
+use net_traits::{NetworkError, ResourceFetchTiming, response::ResponseBody};
 use servo::{
     Opts, OutputOptions, Preferences,
     prefs::set,
@@ -555,7 +555,7 @@ impl ProtocolHandler for ResourceReader {
 
             response
         } else {
-            Response::network_error("Opening file failed")
+            Response::network_error(NetworkError::Crash("Opening file failed".to_string()))
         };
 
         Box::pin(std::future::ready(response))
@@ -572,8 +572,10 @@ impl ProtocolHandler for CustomProtocolHandler {
         done_chan: &mut net::fetch::methods::DoneChannel,
         context: &net::fetch::methods::FetchContext,
     ) -> std::pin::Pin<Box<dyn Future<Output = Response> + Send>> {
-        Box::pin(std::future::ready(Response::network_internal_error(
-            "This should be handled through `on_web_resource_requested` instead",
+        Box::pin(std::future::ready(Response::network_error(
+            NetworkError::Crash(
+                "This should be handled through `on_web_resource_requested` instead".to_string(),
+            ),
         )))
     }
 
