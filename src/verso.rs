@@ -683,7 +683,7 @@ fn create_embedder_channel(
     )
 }
 
-fn create_compositor_channel(
+fn create_paint_channel(
     event_loop_waker: Box<dyn EventLoopWaker>,
 ) -> (PaintProxy, RoutedReceiver<PaintMessage>) {
     let (sender, receiver) = unbounded();
@@ -691,7 +691,7 @@ fn create_compositor_channel(
     let sender_clone = sender.clone();
     let event_loop_waker_clone = event_loop_waker.clone();
     // This callback is equivalent to `PaintProxy::send`
-    let result_callback = move |msg: Result<PaintMessage, ipc_channel::Error>| {
+    let result_callback = move |msg: Result<PaintMessage, servo_media_player::ipc_channel::IpcError>| {
         if let Err(err) = sender_clone.send(msg) {
             log::warn!("Failed to send response ({:?}).", err);
         }
@@ -700,7 +700,7 @@ fn create_compositor_channel(
 
     let generic_callback =
         GenericCallback::new(result_callback).expect("Failed to create callback");
-    let cross_process_compositor_api = CrossProcessPaintApi::new(generic_callback);
+    let cross_process_paint_api = CrossProcessPaintApi::new(generic_callback);
 
     let paint_proxy = PaintProxy {
         sender,
