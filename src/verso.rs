@@ -1,34 +1,21 @@
-use std::{cell::RefCell, collections::HashMap, fmt::Debug, rc::Rc};
-
-use arboard::Clipboard;
-use base::{
-    generic_channel::{GenericCallback, RoutedReceiver},
-    id::{PipelineNamespace, PipelineNamespaceId, WebViewId},
-};
-use compositing_traits::{
-    CompositorMsg, CompositorProxy, CrossProcessCompositorApi, WebRenderExternalImageHandlers,
-    WebRenderImageHandlerType,
-};
-use constellation::{Constellation, FromEmbedderLogger, InitialConstellationState};
-use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use embedder_traits::{
-    AllowOrDeny, EmbedderMsg, EmbedderProxy, EventLoopWaker, WebDriverCommandMsg,
-    WebResourceResponse, WebResourceResponseMsg, user_content_manager::UserContentManager,
-};
-use euclid::Scale;
-use fonts::SystemFontService;
 use ipc_channel::ipc::{self, IpcSender};
 use ipc_channel::router::ROUTER;
-use net::resource_thread;
-use script::{self, JSEngineSetup};
 use servo::{
-    AllowOrDenyRequest, Servo, ServoBuilder, ServoDelegate, ServoError, WebView, WebViewDelegate,
+    EmbedderMsg, EmbedderProxy, EventLoopWaker, UserContentManager, WebResourceResponse,
+    WebResourceResponseMsg,
 };
-use servo_config::{opts, pref};
-use servo_url::ServoUrl;
+
+use servo_base::{
+    generic_channel::GenericCallback, generic_channel::RoutedReceiver, id::WebViewId,
+};
+use servo_constellation_traits::EmbedderToConstellationMessage;
+use paint_api::{PaintMessage, CrossProcessPaintApi, PaintProxy};
+use std::{cell::RefCell, collections::HashMap, fmt::Debug, rc::Rc};
+//use net::resource_thread;
+//use script::JSEngineSetup;
+use servo::{AllowOrDenyRequest, Servo, ServoBuilder, ServoDelegate, ServoError};
 use versoview_messages::{PositionType, SizeType, ToControllerMessage, ToVersoMessage};
-use webrender_api::*;
 use winit::{
     event::WindowEvent,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoopProxy},
@@ -36,7 +23,6 @@ use winit::{
 };
 
 use crate::{
-    bookmark::BookmarkManager,
     config::{Config, parse_cli_args, to_winit_theme, to_winit_window_level},
     window::Window,
 };
@@ -55,15 +41,15 @@ pub struct Verso {
 
 struct VersoServoDelegate;
 impl ServoDelegate for VersoServoDelegate {
-    fn notify_devtools_server_started(&self, _servo: &Servo, port: u16, _token: String) {
+    fn notify_devtools_server_started(&self, port: u16, _token: String) {
         log::info!("Devtools Server running on port {port}");
     }
 
-    fn request_devtools_connection(&self, _servo: &Servo, request: AllowOrDenyRequest) {
+    fn request_devtools_connection(&self, request: AllowOrDenyRequest) {
         request.allow();
     }
 
-    fn notify_error(&self, _servo: &Servo, error: ServoError) {
+    fn notify_error(&self, error: ServoError) {
         log::error!("Saw Servo error: {error:?}!");
     }
 }
@@ -100,20 +86,22 @@ impl Verso {
         let event_loop_waker = Box::new(Waker(proxy));
 
         let (opts, preferences) = config.init();
-        let mut user_content_manager = UserContentManager::new();
-        for script in user_scripts {
-            user_content_manager.add_script(script);
-        }
 
-        let servo_builder = ServoBuilder::new(window.rendering_context.clone())
+        let servo_builder = ServoBuilder::default()
             .opts(opts)
             .preferences(preferences)
-            .user_content_manager(user_content_manager)
             .protocol_registry(protocols)
             .event_loop_waker(event_loop_waker);
         let servo: Servo = servo_builder.build();
         servo.setup_logging();
         servo.set_delegate(Rc::new(VersoServoDelegate));
+
+        let mut user_content_manager = UserContentManager::new(&servo);
+        for script in user_scripts {
+            user_content_manager.add_script(Rc::new(script));
+        }
+
+        servo.user_content_manager(user_content_manager);
 
         let windows = HashMap::new();
 
@@ -269,42 +257,22 @@ impl Verso {
             EmbedderMsg::MoveTo(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ResizeTo(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShowSimpleDialog(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::RequestAuthentication(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::AllowNavigationRequest(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::AllowOpeningWebView(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::WebViewClosed(webview_id) => Some(webview_id),
-            EmbedderMsg::WebViewFocused(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::WebViewBlurred => None,
             EmbedderMsg::AllowUnload(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ClearClipboard(webview_id) => Some(webview_id),
             EmbedderMsg::GetClipboardText(webview_id, ..) => Some(webview_id),
             EmbedderMsg::SetClipboardText(webview_id, ..) => Some(webview_id),
             EmbedderMsg::SetCursor(webview_id, ..) => Some(webview_id),
             EmbedderMsg::NewFavicon(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::HistoryChanged(webview_id, ..) => Some(webview_id),
             EmbedderMsg::NotifyFullscreenStateChanged(webview_id, ..) => Some(webview_id),
             EmbedderMsg::NotifyLoadStatusChanged(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::WebResourceRequested(opt_webview_id, ..) => opt_webview_id.as_ref(),
-            EmbedderMsg::Panic(webview_id, ..) => Some(webview_id),
             EmbedderMsg::GetSelectedBluetoothDevice(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::SelectFiles(embedder_control_id, ..) => {
-                Some(&embedder_control_id.webview_id)
-            }
             EmbedderMsg::PromptPermission(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::ReportProfile(..) => None,
-            EmbedderMsg::MediaSessionEvent(webview_id, ..) => Some(webview_id),
             EmbedderMsg::OnDevtoolsStarted(..) => None,
             EmbedderMsg::RequestDevtoolsConnection(..) => None,
-            EmbedderMsg::PlayGamepadHapticEffect(webview_id, ..) => Some(webview_id),
-            EmbedderMsg::StopGamepadHapticEffect(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShowNotification(opt_webview_id, ..) => opt_webview_id.as_ref(),
-            EmbedderMsg::ShutdownComplete => None,
-            EmbedderMsg::FinishJavaScriptEvaluation(..) => None,
-            EmbedderMsg::HistoryTraversalComplete(webview_id, ..) => Some(webview_id),
             EmbedderMsg::GetWindowRect(webview_id, ..) => Some(webview_id),
             EmbedderMsg::GetScreenMetrics(webview_id, ..) => Some(webview_id),
             EmbedderMsg::ShowEmbedderControl(..) => None,
-            EmbedderMsg::InputEventHandled(webview_id, ..) => Some(webview_id),
             EmbedderMsg::HideEmbedderControl(embedder_control_id) => {
                 Some(&embedder_control_id.webview_id)
             }
@@ -713,13 +681,13 @@ fn create_embedder_channel(
 
 fn create_compositor_channel(
     event_loop_waker: Box<dyn EventLoopWaker>,
-) -> (CompositorProxy, RoutedReceiver<CompositorMsg>) {
+) -> (PaintProxy, RoutedReceiver<PaintMessage>) {
     let (sender, receiver) = unbounded();
 
     let sender_clone = sender.clone();
     let event_loop_waker_clone = event_loop_waker.clone();
-    // This callback is equivalent to `CompositorProxy::send`
-    let result_callback = move |msg: Result<CompositorMsg, ipc_channel::Error>| {
+    // This callback is equivalent to `PaintProxy::send`
+    let result_callback = move |msg: Result<PaintMessage, ipc_channel::Error>| {
         if let Err(err) = sender_clone.send(msg) {
             log::warn!("Failed to send response ({:?}).", err);
         }
@@ -728,13 +696,13 @@ fn create_compositor_channel(
 
     let generic_callback =
         GenericCallback::new(result_callback).expect("Failed to create callback");
-    let cross_process_compositor_api = CrossProcessCompositorApi::new(generic_callback);
+    let cross_process_compositor_api = CrossProcessPaintApi::new(generic_callback);
 
-    let compositor_proxy = CompositorProxy {
+    let paint_proxy = PaintProxy {
         sender,
-        cross_process_compositor_api,
+        cross_process_paint_api,
         event_loop_waker,
     };
 
-    (compositor_proxy, receiver)
+    (paint_proxy, receiver)
 }

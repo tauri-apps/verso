@@ -23,19 +23,19 @@ pub(crate) fn setup_gl_accelerated_media(device: RefMut<'_, Device>, context: Re
     let context = match device.native_context(&context) {
         NativeContext::Default(NativeContext::Default(native_context)) => {
             GlContext::Egl(native_context.egl_context as usize)
-        },
+        }
         NativeContext::Default(NativeContext::Alternate(native_context)) => {
             GlContext::Egl(native_context.egl_context as usize)
-        },
+        }
         NativeContext::Alternate(_) => GlContext::Unknown,
     };
     let display = match device.connection().native_connection() {
         surfman::NativeConnection::Default(NativeConnection::Default(connection)) => {
             NativeDisplay::Egl(connection.0 as usize)
-        },
+        }
         surfman::NativeConnection::Default(NativeConnection::Alternate(connection)) => {
             NativeDisplay::X11(connection.x11_display as usize)
-        },
+        }
         surfman::NativeConnection::Alternate(_) => NativeDisplay::Unknown,
     };
     Servo::initialize_gl_accelerated_media(display, api, context);
@@ -44,7 +44,7 @@ pub(crate) fn setup_gl_accelerated_media(device: RefMut<'_, Device>, context: Re
 #[cfg(target_os = "windows")]
 pub(crate) fn setup_gl_accelerated_media(device: RefMut<'_, Device>, context: RefMut<'_, Context>) {
     use servo::Servo;
-    use servo::media::{GlContext, NativeDisplay};
+    use servo_media_player::context::{GlContext, NativeDisplay};
 
     let api = api(&device, &context);
     let context = GlContext::Egl(device.native_context(&context).egl_context as usize);
@@ -56,8 +56,8 @@ pub(crate) fn setup_gl_accelerated_media(device: RefMut<'_, Device>, context: Re
     all(target_os = "linux", not(target_env = "ohos")),
     target_os = "windows"
 ))]
-fn api(device: &RefMut<Device>, context: &RefMut<Context>) -> servo::media::GlApi {
-    use servo::media::GlApi;
+fn api(device: &RefMut<Device>, context: &RefMut<Context>) -> servo_media_player::context::GlApi {
+    use servo_media_player::context::GlApi;
     use surfman::GLApi;
 
     let descriptor = device.context_descriptor(context);

@@ -1,19 +1,19 @@
 use std::{cell::Cell, collections::HashMap, ops::Deref, rc::Rc};
 
-use base::{generic_channel::GenericSender, id::WebViewId};
-use constellation_traits::EmbedderToConstellationMessage;
-use crossbeam_channel::Sender;
-use embedder_traits::{
-    AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg, ImeEvent, InputEvent,
-    MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent,
-    Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails,
-    WebResourceResponseMsg, WheelMode,
+use embedder_traits::{EmbedderMsg, MouseButtonEvent, MouseMoveEvent, Notification};
+use servo::{
+    Code, Cursor, DeviceIntRect, DevicePoint, DeviceVector2D, GenericSender, InputEvent,
+    MouseButton, MouseButtonAction, ScreenMetrics, WebResourceResponseMsg, WheelMode,
 };
+use servo_base::id::WebViewId;
+use servo_constellation_traits::EmbedderToConstellationMessage;
+use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
+use webrender_api::units::DeviceSize;
+//use servo_em::{EmbedderMsg};
+use crossbeam_channel::Sender;
 use euclid::{Point2D, Scale, Size2D};
 use ipc_channel::ipc::IpcSender;
-use keyboard_types::{
-    Code, CompositionEvent, CompositionState, KeyState, KeyboardEvent, Modifiers,
-};
+use keyboard_types::{KeyState, KeyboardEvent, Modifiers};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use muda::{MenuEvent, MenuEventReceiver};
 #[cfg(linux)]
@@ -22,24 +22,14 @@ use notify_rust::Image;
 use raw_window_handle::HasWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use servo::{
-    LoadStatus, RenderingContext, Scroll, Servo, WebViewBuilder, WebViewDelegate,
-    WindowRenderingContext,
+    LoadStatus, RenderingContext, Scroll, WebViewBuilder, WebViewDelegate, WindowRenderingContext,
 };
-use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
-use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
-use webrender_api::{
-    ScrollLocation,
-    units::{
-        DeviceIntPoint, DeviceIntRect, DevicePixel, DevicePoint, DeviceRect, DeviceSize,
-        DeviceVector2D, LayoutVector2D,
-    },
-};
 #[cfg(any(linux, target_os = "windows"))]
 use winit::window::ResizeDirection;
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
-    event::{ElementState, Ime, TouchPhase, WindowEvent},
+    event::{ElementState, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::ModifiersState,
     window::{CursorIcon, Window as WinitWindow, WindowAttributes, WindowId},
@@ -50,7 +40,6 @@ use crate::{
     bookmark::BookmarkManager,
     keyboard::keyboard_event_from_winit,
     tab::TabManager,
-    verso::send_to_constellation,
     webview::{
         Panel,
         // prompt::PromptSender, webview_menu::WebViewMenu

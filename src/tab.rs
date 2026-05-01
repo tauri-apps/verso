@@ -1,10 +1,10 @@
 use std::collections::HashMap;
 
 // use crate::webview::prompt::PromptDialog;
-use base::id::WebViewId;
 use dpi::PhysicalSize;
 use serde::{Deserialize, Serialize};
 use servo::WebView;
+use servo_base::id::WebViewId;
 use servo_url::ServoUrl;
 
 /// Tab state
