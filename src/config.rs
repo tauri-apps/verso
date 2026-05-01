@@ -176,7 +176,12 @@ pub fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
     let resource_dir = matches.opt_str("resources").map(PathBuf::from);
     let ipc_channel = matches.opt_str("ipc-channel");
     let no_panel = matches.opt_present("no-panel");
-    let devtools_address = matches.opt_str("devtools-address");
+    let devtools_address = matches
+        .opt_get::<String>("devtools-address")
+        .unwrap_or_else(|e| {
+            log::error!("Failed to parse devtools-address command line argument: {e}");
+            None
+        });
     let webdriver_port = matches
         .opt_get::<u16>("webdriver-port")
         .unwrap_or_else(|e| {
@@ -435,10 +440,10 @@ impl Config {
         // initialize_options(opts);
 
         let (devtools_server_enabled, devtools_address) =
-            if let Some(devtools_addres) = self.devtools_address {
-                (true, self.devtools_address)
+            if let Some(devtools_address) = self.devtools_address {
+                (true, devtools_address)
             } else {
-                (false, Some("".to_string()))
+                (false, "127.0.0.1:7000".to_string())
             };
 
         // Set the preferences of Servo.

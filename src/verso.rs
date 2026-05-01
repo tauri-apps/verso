@@ -6,11 +6,11 @@ use servo::{
     WebResourceResponseMsg,
 };
 
+use paint_api::{CrossProcessPaintApi, PaintMessage, PaintProxy};
 use servo_base::{
     generic_channel::GenericCallback, generic_channel::RoutedReceiver, id::WebViewId,
 };
 use servo_constellation_traits::EmbedderToConstellationMessage;
-use paint_api::{PaintMessage, CrossProcessPaintApi, PaintProxy};
 use std::{cell::RefCell, collections::HashMap, fmt::Debug, rc::Rc};
 //use net::resource_thread;
 //use script::JSEngineSetup;
