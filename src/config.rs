@@ -12,7 +12,6 @@ use net::protocols::{ProtocolHandler, ProtocolRegistry};
 use net_traits::{NetworkError, ResourceFetchTiming, response::ResponseBody};
 use servo::{
     Opts, OutputOptions, Preferences,
-    prefs::set,
     protocol_handler::{Request, Response},
     user_contents::UserScript as ServoUserScript,
 };
@@ -27,7 +26,7 @@ static RESOURCE_READER: ResourceReaderImpl = ResourceReaderImpl {
     resource_dir: OnceLock::new(),
 };
 
-impl ResourceReaderMethods for ResourceReaderImpl {
+impl ResourceReaderImpl for ResourceReaderImpl {
     fn read(&self, res: Resource) -> Vec<u8> {
         vec![]
     }
