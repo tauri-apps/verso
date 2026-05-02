@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
@@ -17,6 +18,28 @@ use servo::{
 };
 use versoview_messages::{ConfigFromController, CustomProtocol, UserScript};
 use winit::window::{Fullscreen, WindowAttributes};
+
+pub(crate) struct ResourceReaderImpl {
+    resource_dir: OnceLock<PathBuf>,
+}
+
+static RESOURCE_READER: ResourceReaderImpl = ResourceReaderImpl {
+    resource_dir: OnceLock::new(),
+};
+
+impl ResourceReaderMethods for ResourceReaderImpl {
+    fn read(&self, res: Resource) -> Vec<u8> {
+        vec![]
+    }
+    fn sandbox_access_files(&self) -> Vec<PathBuf> {
+        vec![]
+    }
+    fn sandbox_access_files_dirs(&self) -> Vec<PathBuf> {
+        vec![]
+    }
+}
+
+servo::submit_resource_reader!(&RESOURCE_READER);
 
 /// Servo time profile settings
 #[derive(Clone, Debug)]
@@ -427,7 +450,7 @@ impl Config {
     /// Init options and preferences.
     pub fn init(&self) -> (Opts, Preferences) {
         // Set the resource files of Servo.
-        resources::set(Box::new(ResourceReader(self.resource_dir.clone())));
+        RESOURCE_READER.resource_dir.set(self.resource_dir.clone());
 
         let mut opts = Opts::default();
 
@@ -440,7 +463,7 @@ impl Config {
         // initialize_options(opts);
 
         let (devtools_server_enabled, devtools_address) =
-            if let Some(devtools_address) = self.devtools_address {
+            if let Some(devtools_address) = self.devtools_address.clone() {
                 (true, devtools_address)
             } else {
                 (false, "127.0.0.1:7000".to_string())
