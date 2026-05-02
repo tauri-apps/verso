@@ -101,7 +101,7 @@ impl Verso {
             user_content_manager.add_script(Rc::new(script));
         }
 
-        servo.user_content_manager(user_content_manager);
+        // servo.user_content_manager(user_content_manager);
 
         let windows = HashMap::new();
 
@@ -691,12 +691,13 @@ fn create_paint_channel(
     let sender_clone = sender.clone();
     let event_loop_waker_clone = event_loop_waker.clone();
     // This callback is equivalent to `PaintProxy::send`
-    let result_callback = move |msg: Result<PaintMessage, servo_media_player::ipc_channel::IpcError>| {
-        if let Err(err) = sender_clone.send(msg) {
-            log::warn!("Failed to send response ({:?}).", err);
-        }
-        event_loop_waker_clone.wake();
-    };
+    let result_callback =
+        move |msg: Result<PaintMessage, servo_media_player::ipc_channel::IpcError>| {
+            if let Err(err) = sender_clone.send(msg) {
+                log::warn!("Failed to send response ({:?}).", err);
+            }
+            event_loop_waker_clone.wake();
+        };
 
     let generic_callback =
         GenericCallback::new(result_callback).expect("Failed to create callback");
