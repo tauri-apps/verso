@@ -318,12 +318,13 @@ impl Window {
             verso: verso.clone(),
             window_id: self.id(),
         });
-        let webview = WebViewBuilder::new(&verso.servo)
+        let webview = WebViewBuilder::new(&verso.servo, self.rendering_context)
             .url(url::Url::parse("verso://resources/components/panel.html").unwrap())
             .hidpi_scale_factor(hidpi_scale_factor)
-            .size(size)
             .delegate(Rc::new(delegate))
             .build();
+
+        webview.resize(size);
         self.panel = Some(Panel {
             webview,
             initial_url,
@@ -345,13 +346,13 @@ impl Window {
             verso: verso.clone(),
             window_id: self.id(),
         };
-        let webview = WebViewBuilder::new(&verso.servo)
+        let webview = WebViewBuilder::new(&verso.servo, self.rendering_context.clone())
             .url(initial_url)
             .hidpi_scale_factor(hidpi_scale_factor)
-            .size(content_size)
             .delegate(Rc::new(delegate))
             .build();
 
+        webview.resize(content_size);
         if let Some(panel) = &self.panel {
             let cmd: String = format!(
                 "window.navbar.addTab('{}', {})",
@@ -561,7 +562,7 @@ impl Window {
             }
             WindowEvent::PinchGesture { delta, .. } => {
                 let center = self.mouse_position.get().unwrap_or_default();
-                webview.pinch_zoom(
+                webview.adjust_pinch_zoom(
                     *delta as f32 + 1.0,
                     Point2D::new(center.x as f32, center.y as f32),
                 );
