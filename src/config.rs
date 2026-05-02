@@ -465,7 +465,7 @@ impl Config {
             if let Some(devtools_address) = self.devtools_address.clone() {
                 (true, devtools_address)
             } else {
-                (false, "127.0.0.1:7000".to_string())
+                (false, "".to_string())
             };
 
         // Set the preferences of Servo.
