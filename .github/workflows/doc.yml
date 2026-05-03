@@ -12,7 +12,7 @@ jobs:
     permissions:
       actions: write # for purging
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: nixbuild/nix-quick-install-action@v28
 
       - name: "Add Nix channel"
@@ -38,7 +38,7 @@ jobs:
     needs: build
     steps:
       - name: "Checkout `docs` repository"
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           repository: versotile-org/www-docs
           ssh-key: ${{ secrets.DOCS_DEPLOY_KEY }}
