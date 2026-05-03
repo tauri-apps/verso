@@ -306,7 +306,7 @@ pub struct Config {
     pub with_panel: bool,
     /// Window settings for the initial winit window
     pub window_attributes: WindowAttributes,
-    /// Devtools address to start a server to listen to remoste Firefox devtools connections.
+    /// Devtools address to start a server to listen to remote Firefox devtools connections.
     pub devtools_address: Option<String>,
     /// Start remote WebDriver server on port
     pub webdriver_port: Option<u16>,
@@ -465,7 +465,7 @@ impl Config {
             if let Some(devtools_address) = self.devtools_address.clone() {
                 (true, devtools_address)
             } else {
-                (false, "127.0.0.1:7000".to_string())
+                (false, "".to_string())
             };
 
         // Set the preferences of Servo.
