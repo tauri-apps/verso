@@ -192,7 +192,7 @@ impl Verso {
                 }
             }
             // self.windows.remove(&window_id);
-            self.servo.start_shutting_down();
+            drop(&self.servo);
             event_loop.exit();
         } else {
             window.handle_winit_window_event(&self, &event);
@@ -565,7 +565,7 @@ impl Verso {
 
     /// Return true if one of the Verso windows is animating.
     pub fn is_animating(&self) -> bool {
-        self.servo.animating()
+        self.servo.is_animating()
     }
 }
 
