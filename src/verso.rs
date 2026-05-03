@@ -565,7 +565,11 @@ impl Verso {
 
     /// Return true if one of the Verso windows is animating.
     pub fn is_animating(&self) -> bool {
-        self.servo.is_animating()
+        self.windows
+            .borrow()
+            .values()
+            .flat_map(|vw| vw.tab_manager.tabs())
+            .any(|tab| tab.webview().clone().animating())
     }
 }
 
