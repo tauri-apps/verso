@@ -8,7 +8,7 @@ use servo::{
 use servo_base::id::WebViewId;
 use servo_constellation_traits::EmbedderToConstellationMessage;
 use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
-use webrender_api::units::DeviceSize;
+use webrender_api::units::{DeviceRect, DeviceSize};
 //use servo_em::{EmbedderMsg};
 use crossbeam_channel::Sender;
 use euclid::{Point2D, Scale, Size2D};
@@ -1051,18 +1051,23 @@ impl Window {
     /// returns the [`WebViewId`] of that webview
     fn forward_mouse_move(&self, point: DevicePoint) -> Option<WebViewId> {
         for webview in [
-            &self.tab_manager.current_tab().map(|tab| tab.webview()),
-            &self.panel.as_ref().map(|panel| &panel.webview),
+            self.tab_manager.current_tab().map(|tab| tab.webview()),
+            self.panel
+                .as_ref()
+                .map(|panel| panel.webview.clone())
+                .as_ref(),
         ]
         .into_iter()
-        .filter_map(|webview| *webview)
+        .flatten()
         {
-            if !webview.rect().contains(point) {
+            let size = webview.size();
+            let rect = DeviceRect::from_size(size);
+
+            if !rect.contains(point) {
                 continue;
             }
 
             webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(point.into())));
-
             return Some(webview.id());
         }
 
