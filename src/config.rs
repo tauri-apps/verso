@@ -26,7 +26,7 @@ static RESOURCE_READER: ResourceReaderImpl = ResourceReaderImpl {
     resource_dir: OnceLock::new(),
 };
 
-impl ResourceReaderImpl for ResourceReaderImpl {
+impl ResourceReaderMethods for ResourceReaderImpl {
     fn read(&self, res: Resource) -> Vec<u8> {
         vec![]
     }
