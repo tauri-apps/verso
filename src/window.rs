@@ -318,7 +318,7 @@ impl Window {
             verso: verso.clone(),
             window_id: self.id(),
         });
-        let webview = WebViewBuilder::new(&verso.servo, self.rendering_context)
+        let webview = WebViewBuilder::new(&verso.servo, self.rendering_context.clone())
             .url(url::Url::parse("verso://resources/components/panel.html").unwrap())
             .hidpi_scale_factor(hidpi_scale_factor)
             .delegate(Rc::new(delegate))
