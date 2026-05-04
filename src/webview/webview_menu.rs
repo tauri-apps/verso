@@ -38,7 +38,7 @@ pub trait WebViewMenu {
             EmbedderToConstellationMessage::NewWebView(
                 self.resource_url(),
                 NewWebViewDetails {
-                    webview_id: self.webview.id(),
+                    webview_id: self.webview().id(),
                     viewport_details: ViewportDetails {
                         size,
                         hidpi_scale_factor,
