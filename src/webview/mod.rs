@@ -8,4 +8,4 @@ pub use webview::Panel;
 // /// Prompt Dialog
 // pub mod prompt;
 // /// WebView Menu
-// pub mod webview_menu;
+pub mod webview_menu;
