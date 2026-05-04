@@ -15,7 +15,7 @@ pub(crate) fn setup_gl_accelerated_media(_: RefMut<'_, Device>, _: RefMut<'_, Co
 #[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub(crate) fn setup_gl_accelerated_media(device: RefMut<'_, Device>, context: RefMut<'_, Context>) {
     use servo::Servo;
-    use servo_media_player::context::{NativeContext, GlContext};
+    use servo_media_player::context::{NativeDisplay, GlContext};
     use surfman::platform::generic::multi::connection::NativeConnection;
     use surfman::platform::generic::multi::context::NativeContext;
 
