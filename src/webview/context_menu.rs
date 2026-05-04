@@ -1,7 +1,7 @@
 use crate::verso::send_to_constellation;
 use crate::window::Window;
 use base::generic_channel::GenericSender;
-use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
+use servo_constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 #[cfg(linux)]
 use embedder_traits::ViewportDetails;
 use embedder_traits::{ContextMenuResult, TraversalId};

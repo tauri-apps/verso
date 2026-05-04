@@ -18,8 +18,6 @@ use keyboard_types::{KeyState, KeyboardEvent, Modifiers};
 use muda::{MenuEvent, MenuEventReceiver};
 #[cfg(linux)]
 use notify_rust::Image;
-#[cfg(target_os = "macos")]
-use raw_window_handle::HasWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use servo::{
     LoadStatus, RenderingContext, Scroll, WebViewBuilder, WebViewDelegate, WindowRenderingContext,
