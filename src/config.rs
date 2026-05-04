@@ -14,7 +14,7 @@ use net_traits::{
     response::{Response, ResponseBody},
 };
 use servo_config::{
-    opts::{Opts, OutputOptions, initialize_options},
+    opts::{Opts, OutputOptions},
     prefs::Preferences,
 };
 use versoview_messages::{ConfigFromController, CustomProtocol, UserScript};
@@ -428,7 +428,7 @@ impl Config {
     }
 
     /// Init options and preferences.
-    pub fn init(&self) {
+    pub fn init(&self) -> (Opts, Preferences) {
         // Set the resource files of Servo.
         resources::set(Box::new(ResourceReader(self.resource_dir.clone())));
 
@@ -440,7 +440,7 @@ impl Config {
         }
 
         // Set the global options of Servo.
-        initialize_options(opts);
+        // initialize_options(opts);
 
         let (devtools_server_enabled, devtools_port) =
             if let Some(devtools_port) = self.devtools_port {
@@ -450,13 +450,17 @@ impl Config {
             };
 
         // Set the preferences of Servo.
-        servo_config::prefs::set(Preferences {
+        // servo_config::prefs::set(
+        let preference = Preferences {
             devtools_server_enabled,
             devtools_server_port: devtools_port as i64,
             dom_notification_enabled: true, // experimental feature
             user_agent: self.user_agent.clone(),
             ..Default::default()
-        });
+        };
+        // );
+
+        (opts, preference)
     }
 }
 
@@ -488,7 +492,7 @@ impl ResourceReaderMethods for ResourceReader {
             match resource {
                 // Rigppy image is the only one needs to be valid bytes.
                 // Others can be empty and Servo will set to default.
-                Resource::RippyPNG => &include_bytes!("../resources/rippy.png")[..],
+                Resource::BrokenImageIcon => &include_bytes!("../resources/rippy.png")[..],
                 Resource::HstsPreloadList => {
                     log::warn!(
                         "HSTS preload list not found, falling back to an empty list, to set this, put the list at '{}'",

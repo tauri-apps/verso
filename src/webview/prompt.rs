@@ -1,6 +1,7 @@
 use base::{generic_channel::GenericSender, id::WebViewId};
 use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::Sender;
+use dpi::PhysicalSize;
 use embedder_traits::{
     AlertResponse, AllowOrDeny, AuthenticationResponse, ConfirmResponse, PromptResponse,
     ViewportDetails,
@@ -121,8 +122,8 @@ impl PromptDialog {
     /// let content_size = window.get_content_size(rect);
     /// prompt.set_size(content_size);
     /// ```
-    pub fn set_size(&mut self, rect: DeviceRect) {
-        self.webview.set_size(rect);
+    pub fn set_size(&mut self, size: PhysicalSize<u32>) {
+        self.webview.set_size(size);
     }
 
     /// Show alert prompt.

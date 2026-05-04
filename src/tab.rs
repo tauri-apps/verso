@@ -1,21 +1,20 @@
 use std::collections::HashMap;
 
-use crate::webview::{WebView, prompt::PromptDialog};
+// use crate::webview::prompt::PromptDialog;
 use base::id::WebViewId;
+use dpi::PhysicalSize;
 use serde::{Deserialize, Serialize};
+use servo::WebView;
 use servo_url::ServoUrl;
-use webrender_api::units::DeviceRect;
 
 /// Tab state
 pub struct Tab {
-    /// Tab WebView id
-    id: WebViewId,
     /// Tab WebView
     webview: WebView,
     /// History
     history: TabHistory,
-    /// Prompt
-    prompt: Option<PromptDialog>,
+    // /// Prompt
+    // prompt: Option<PromptDialog>,
     /// Title
     title: String,
 }
@@ -24,20 +23,19 @@ impl Tab {
     /// Create a new tab state.
     pub fn new(webview: WebView) -> Self {
         Self {
-            id: webview.webview_id,
             webview,
             history: TabHistory {
                 list: Vec::new(),
                 current_idx: 0,
             },
-            prompt: None,
+            // prompt: None,
             title: "null".to_string(),
         }
     }
 
     /// Get tab WebView id.
     pub fn id(&self) -> WebViewId {
-        self.id
+        self.webview().id()
     }
 
     /// Get tab WebView.
@@ -46,8 +44,8 @@ impl Tab {
     }
 
     /// Set tab WebView size.
-    pub fn set_webview_size(&mut self, rect: DeviceRect) {
-        self.webview.set_size(rect);
+    pub fn set_webview_size(&mut self, size: PhysicalSize<u32>) {
+        self.webview.resize(size);
     }
 
     /// Get tab history.
@@ -60,37 +58,37 @@ impl Tab {
         self.history = TabHistory { list, current_idx };
     }
 
-    /// Get tab prompt dialog.
-    pub fn prompt(&self) -> Option<&PromptDialog> {
-        self.prompt.as_ref()
-    }
+    // /// Get tab prompt dialog.
+    // pub fn prompt(&self) -> Option<&PromptDialog> {
+    //     self.prompt.as_ref()
+    // }
 
-    /// Get tab prompt id.
-    pub fn prompt_id(&self) -> Option<WebViewId> {
-        self.prompt.as_ref().map(|p| p.id())
-    }
+    // /// Get tab prompt id.
+    // pub fn prompt_id(&self) -> Option<WebViewId> {
+    //     self.prompt.as_ref().map(|p| p.id())
+    // }
 
-    /// Set tab prompt dialog.
-    pub fn set_prompt(&mut self, prompt: PromptDialog) {
-        self.prompt = Some(prompt);
-    }
+    // /// Set tab prompt dialog.
+    // pub fn set_prompt(&mut self, prompt: PromptDialog) {
+    //     self.prompt = Some(prompt);
+    // }
 
-    /// Remove tab prompt dialog.
-    pub fn remove_prompt(&mut self) -> Option<PromptDialog> {
-        self.prompt.take()
-    }
+    // /// Remove tab prompt dialog.
+    // pub fn remove_prompt(&mut self) -> Option<PromptDialog> {
+    //     self.prompt.take()
+    // }
 
-    /// Check if there is a prompt dialog.
-    pub fn has_prompt(&self) -> bool {
-        self.prompt.is_some()
-    }
+    // /// Check if there is a prompt dialog.
+    // pub fn has_prompt(&self) -> bool {
+    //     self.prompt.is_some()
+    // }
 
-    /// Set prompt webview size.
-    pub fn set_prompt_size(&mut self, rect: DeviceRect) {
-        if let Some(prompt) = self.prompt.as_mut() {
-            prompt.set_size(rect);
-        }
-    }
+    // /// Set prompt webview size.
+    // pub fn set_prompt_size(&mut self, rect: PhysicalSize<u32>) {
+    //     if let Some(prompt) = self.prompt.as_mut() {
+    //         prompt.set_size(rect);
+    //     }
+    // }
 
     /// Set tab title.
     pub fn set_title(&mut self, title: String) {
@@ -150,6 +148,12 @@ impl TabManager {
     pub fn tab_ids(&self) -> Vec<WebViewId> {
         self.tab_map.keys().cloned().collect()
     }
+
+    /// Get all tab id.
+    pub fn tabs(&self) -> std::collections::hash_map::Values<'_, WebViewId, Tab> {
+        self.tab_map.values()
+    }
+
     /// Activate the tab by tab id.
     pub fn activate_tab(&mut self, tab_id: WebViewId) -> Option<&Tab> {
         if let Some(tab) = self.tab_map.get(&tab_id) {
@@ -166,7 +170,7 @@ impl TabManager {
     }
     /// Append a tab.
     pub fn append_tab(&mut self, webview: WebView, active: bool) {
-        let id = webview.webview_id;
+        let id = webview.id();
         let tab = Tab::new(webview);
         self.tab_map.insert(id, tab);
         if active {
@@ -185,17 +189,17 @@ impl TabManager {
     pub fn set_size(
         &mut self,
         tab_id: WebViewId,
-        rect: DeviceRect,
+        size: PhysicalSize<u32>,
     ) -> (Option<WebViewId>, Option<WebViewId>) {
         if let Some(tab) = self.tab_map.get_mut(&tab_id) {
-            tab.set_webview_size(rect);
+            tab.set_webview_size(size);
 
-            if let Some(prompt_id) = tab.prompt_id() {
-                tab.set_prompt_size(rect);
-                (Some(tab_id), Some(prompt_id))
-            } else {
-                (Some(tab_id), None)
-            }
+            // if let Some(prompt_id) = tab.prompt_id() {
+            // tab.set_prompt_size(size);
+            // (Some(tab_id), Some(prompt_id))
+            // } else {
+            (Some(tab_id), None)
+            // }
         } else {
             (None, None)
         }
@@ -214,57 +218,56 @@ impl TabManager {
         };
     }
 
-    /* Prompt */
-
-    /// Get prompt dialog by tab id.
-    pub fn prompt_by_tab_id(&self, tab_id: WebViewId) -> Option<&PromptDialog> {
-        self.tab_map.get(&tab_id).and_then(|tab| tab.prompt())
-    }
-    /// Get prompt dialog by tab id.
-    pub fn prompt_by_prompt_id(&self, prompt_id: WebViewId) -> Option<&PromptDialog> {
-        if let Some(tab_id) = self.prompt_tab_map.get(&prompt_id) {
-            self.prompt_by_tab_id(*tab_id)
-        } else {
-            None
-        }
-    }
-    /// Get current tabw prompt dialog.
-    pub fn current_prompt(&self) -> Option<&PromptDialog> {
-        if let Some(tab_id) = self.active_tab_id {
-            self.prompt_by_tab_id(tab_id)
-        } else {
-            None
-        }
-    }
-    /// Set tab prompt dialog.
-    pub fn set_prompt(&mut self, tab_id: WebViewId, prompt: PromptDialog) {
-        if let Some(tab) = self.tab_map.get_mut(&tab_id) {
-            self.prompt_tab_map.insert(prompt.id(), tab_id);
-            tab.set_prompt(prompt);
-        }
-    }
-    /// Remove prompt by tab webview ID.
-    pub fn remove_prompt_by_tab_id(&mut self, tab_id: WebViewId) -> Option<PromptDialog> {
-        if let Some(tab) = self.tab_map.get_mut(&tab_id) {
-            if let Some(prompt) = tab.remove_prompt() {
-                self.prompt_tab_map.remove(&prompt.id());
-                return Some(prompt);
-            }
-        }
-        None
-    }
-    /// Remove prompt by prompt webview ID.
-    pub fn remove_prompt_by_prompt_id(&mut self, prompt_id: WebViewId) -> Option<PromptDialog> {
-        if let Some(tab_id) = self.prompt_tab_map.remove(&prompt_id) {
-            self.remove_prompt_by_tab_id(tab_id)
-        } else {
-            None
-        }
-    }
-    /// Check if there is a prompt dialog by prompt webview ID.
-    pub fn has_prompt(&self, prompt_id: WebViewId) -> bool {
-        self.prompt_tab_map.contains_key(&prompt_id)
-    }
+    // /* Prompt */
+    // /// Get prompt dialog by tab id.
+    // pub fn prompt_by_tab_id(&self, tab_id: WebViewId) -> Option<&PromptDialog> {
+    //     self.tab_map.get(&tab_id).and_then(|tab| tab.prompt())
+    // }
+    // /// Get prompt dialog by tab id.
+    // pub fn prompt_by_prompt_id(&self, prompt_id: WebViewId) -> Option<&PromptDialog> {
+    //     if let Some(tab_id) = self.prompt_tab_map.get(&prompt_id) {
+    //         self.prompt_by_tab_id(*tab_id)
+    //     } else {
+    //         None
+    //     }
+    // }
+    // /// Get current tabw prompt dialog.
+    // pub fn current_prompt(&self) -> Option<&PromptDialog> {
+    //     if let Some(tab_id) = self.active_tab_id {
+    //         self.prompt_by_tab_id(tab_id)
+    //     } else {
+    //         None
+    //     }
+    // }
+    // /// Set tab prompt dialog.
+    // pub fn set_prompt(&mut self, tab_id: WebViewId, prompt: PromptDialog) {
+    //     if let Some(tab) = self.tab_map.get_mut(&tab_id) {
+    //         self.prompt_tab_map.insert(prompt.id(), tab_id);
+    //         tab.set_prompt(prompt);
+    //     }
+    // }
+    // /// Remove prompt by tab webview ID.
+    // pub fn remove_prompt_by_tab_id(&mut self, tab_id: WebViewId) -> Option<PromptDialog> {
+    //     if let Some(tab) = self.tab_map.get_mut(&tab_id) {
+    //         if let Some(prompt) = tab.remove_prompt() {
+    //             self.prompt_tab_map.remove(&prompt.id());
+    //             return Some(prompt);
+    //         }
+    //     }
+    //     None
+    // }
+    // /// Remove prompt by prompt webview ID.
+    // pub fn remove_prompt_by_prompt_id(&mut self, prompt_id: WebViewId) -> Option<PromptDialog> {
+    //     if let Some(tab_id) = self.prompt_tab_map.remove(&prompt_id) {
+    //         self.remove_prompt_by_tab_id(tab_id)
+    //     } else {
+    //         None
+    //     }
+    // }
+    // /// Check if there is a prompt dialog by prompt webview ID.
+    // pub fn has_prompt(&self, prompt_id: WebViewId) -> bool {
+    //     self.prompt_tab_map.contains_key(&prompt_id)
+    // }
 }
 
 impl Default for TabManager {

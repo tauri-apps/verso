@@ -1,11 +1,11 @@
 mod webview;
 /// WebView
-pub use webview::{Panel, WebView};
-/// Context Menu
-pub mod context_menu;
-/// Browsing history menu
-pub mod history_menu;
-/// Prompt Dialog
-pub mod prompt;
-/// WebView Menu
-pub mod webview_menu;
+pub use webview::Panel;
+// /// Context Menu
+// pub mod context_menu;
+// /// Browsing history menu
+// pub mod history_menu;
+// /// Prompt Dialog
+// pub mod prompt;
+// /// WebView Menu
+// pub mod webview_menu;
