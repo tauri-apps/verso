@@ -1,9 +1,9 @@
-use servo_constellation_traits::EmbedderToConstellationMessage;
-use servo::WebView;
 use crossbeam_channel::Sender;
 use dpi::{LogicalPosition, PhysicalPosition};
-use embedder_traits::ViewportDetails;
+use embedder_traits::{NewWebViewDetails, ViewportDetails};
 use euclid::Scale;
+use servo::WebView;
+use servo_constellation_traits::EmbedderToConstellationMessage;
 use servo_url::ServoUrl;
 use webrender_api::units::DeviceRect;
 
@@ -37,9 +37,14 @@ pub trait WebViewMenu {
             sender,
             EmbedderToConstellationMessage::NewWebView(
                 self.resource_url(),
-                ViewportDetails {
-                    size,
-                    hidpi_scale_factor,
+                NewWebViewDetails {
+                    webview_id: self.webview.id(),
+                    viewport_details: ViewportDetails {
+                        size,
+                        hidpi_scale_factor,
+                    },
+                    // Todo: create userContentManager
+                    user_content_manager_id: None,
                 },
             ),
         );
