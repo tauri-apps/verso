@@ -18,6 +18,7 @@ concurrency:
 
 env:
   CN_APP_SLUG: verso/verso-nightly
+  CARGO_TERM_COLOR: always
 
 jobs:
   pr-fast-check:
