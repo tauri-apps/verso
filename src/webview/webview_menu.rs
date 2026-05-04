@@ -48,7 +48,7 @@ pub trait WebViewMenu {
     fn close(&mut self, sender: &Sender<EmbedderToConstellationMessage>) {
         send_to_constellation(
             sender,
-            EmbedderToConstellationMessage::CloseWebView(self.webview().id),
+            EmbedderToConstellationMessage::CloseWebView(self.webview().id()),
         );
     }
 }
