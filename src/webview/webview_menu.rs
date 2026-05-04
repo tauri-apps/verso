@@ -1,4 +1,4 @@
-use constellation_traits::EmbedderToConstellationMessage;
+use servo_constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::Sender;
 use dpi::{LogicalPosition, PhysicalPosition};
 use embedder_traits::ViewportDetails;
@@ -8,7 +8,7 @@ use webrender_api::units::DeviceRect;
 
 use crate::{verso::send_to_constellation, window::Window};
 
-use super::WebView;
+//use super::WebView;
 
 /// Trait for webview menus
 pub trait WebViewMenu {
