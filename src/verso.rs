@@ -137,20 +137,20 @@ impl Verso {
     ) {
         #[cfg(linux)]
         if let WindowEvent::Resized(_) = event {
-            self.handle_winit_window_event(window_id, event);
+            self.handle_winit_window_event(window_id, event, event_loop);
         } else {
-            self.handle_winit_window_event(window_id, event);
+            self.handle_winit_window_event(window_id, event, event_loop);
             self.handle_servo_messages(event_loop);
         }
 
         #[cfg(apple)]
         if let WindowEvent::RedrawRequested = event {
-            let resizing = self.handle_winit_window_event(window_id, event);
+            let resizing = self.handle_winit_window_event(window_id, event, event_loop);
             if !resizing {
                 self.handle_servo_messages(event_loop);
             }
         } else {
-            self.handle_winit_window_event(window_id, event);
+            self.handle_winit_window_event(window_id, event, event_loop);
             self.handle_servo_messages(event_loop);
         }
 
