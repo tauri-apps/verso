@@ -5,7 +5,7 @@ use std::{
 };
 
 use dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use embedder_traits::resources::{self, Resource, ResourceReaderMethods};
+use embedder_traits::resources::{Resource, ResourceReaderMethods};
 //use embedder_traits::user_content_manager::UserScript as ServoUserScript;
 use headers::{ContentType, HeaderMapExt};
 use net::protocols::{ProtocolHandler, ProtocolRegistry};
@@ -17,28 +17,6 @@ use servo::{
 };
 use versoview_messages::{ConfigFromController, CustomProtocol, UserScript};
 use winit::window::{Fullscreen, WindowAttributes};
-
-pub(crate) struct ResourceReaderImpl {
-    resource_dir: OnceLock<PathBuf>,
-}
-
-static RESOURCE_READER: ResourceReaderImpl = ResourceReaderImpl {
-    resource_dir: OnceLock::new(),
-};
-
-impl ResourceReaderMethods for ResourceReaderImpl {
-    fn read(&self, res: Resource) -> Vec<u8> {
-        vec![]
-    }
-    fn sandbox_access_files(&self) -> Vec<PathBuf> {
-        vec![]
-    }
-    fn sandbox_access_files_dirs(&self) -> Vec<PathBuf> {
-        vec![]
-    }
-}
-
-servo::submit_resource_reader!(&RESOURCE_READER);
 
 /// Servo time profile settings
 #[derive(Clone, Debug)]
@@ -66,7 +44,7 @@ pub struct CliArgs {
     /// Don't maximize the initial window
     pub no_maximized: bool,
     /// Devtools address to start a server to listen to remote Firefox devtools connections.
-    pub devtools_address: Option<String>,
+    //  pub devtools_address: Option<String>,
     /// Start remote WebDriver server on port
     pub webdriver_port: Option<u16>,
     /// Servo time profile settings
@@ -198,12 +176,12 @@ pub fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
     let resource_dir = matches.opt_str("resources").map(PathBuf::from);
     let ipc_channel = matches.opt_str("ipc-channel");
     let no_panel = matches.opt_present("no-panel");
-    let devtools_address = matches
-        .opt_get::<String>("devtools-address")
-        .unwrap_or_else(|e| {
-            log::error!("Failed to parse devtools-address command line argument: {e}");
-            None
-        });
+    //  let devtools_address = matches
+    //      .opt_get::<String>("devtools-address")
+    //     .unwrap_or_else(|e| {
+    //        log::error!("Failed to parse devtools-address command line argument: {e}");
+    //        None
+    //   });
     let webdriver_port = matches
         .opt_get::<u16>("webdriver-port")
         .unwrap_or_else(|e| {
@@ -284,7 +262,7 @@ pub fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
         resource_dir,
         ipc_channel,
         no_panel,
-        devtools_address,
+        //   devtools_address,
         webdriver_port,
         profiler_settings,
         user_agent,
@@ -307,7 +285,7 @@ pub struct Config {
     /// Window settings for the initial winit window
     pub window_attributes: WindowAttributes,
     /// Devtools address to start a server to listen to remote Firefox devtools connections.
-    pub devtools_address: Option<String>,
+    // pub devtools_address: Option<String>,
     /// Start remote WebDriver server on port
     pub webdriver_port: Option<u16>,
     /// Servo time profile settings
@@ -338,7 +316,7 @@ impl Config {
         Self::from_controller_config(ConfigFromController {
             url: cli_args.url,
             with_panel: !cli_args.no_panel,
-            devtools_address: cli_args.devtools_address,
+            //  devtools_address: cli_args.devtools_address,
             profiler_settings: cli_args.profiler_settings,
             user_agent: cli_args.user_agent,
             user_scripts,
@@ -413,7 +391,7 @@ impl Config {
                 .unwrap_or_else(|| url::Url::parse("https://example.com").unwrap()),
             with_panel,
             window_attributes,
-            devtools_address: config.devtools_address,
+            //  devtools_address: config.devtools_address,
             webdriver_port: config.webdriver_port,
             profiler_settings,
             user_agent,
@@ -449,7 +427,7 @@ impl Config {
     /// Init options and preferences.
     pub fn init(&self) -> (Opts, Preferences) {
         // Set the resource files of Servo.
-        RESOURCE_READER.resource_dir.set(self.resource_dir.clone());
+        //   RESOURCE_READER.resource_dir.set(self.resource_dir.clone());
 
         let mut opts = Opts::default();
 
@@ -460,19 +438,19 @@ impl Config {
 
         // Set the global options of Servo.
         // initialize_options(opts);
-
-        let (devtools_server_enabled, devtools_address) =
-            if let Some(devtools_address) = self.devtools_address.clone() {
-                (true, devtools_address)
-            } else {
-                (false, "".to_string())
-            };
+        let devtools_server_enabled = false;
+        //  let (devtools_server_enabled, devtools_address) =
+        // if let Some(devtools_address) = self.devtools_address.clone() {
+        //      (true, devtools_address)
+        //  } else {
+        //   (false, "".to_string())
+        // };
 
         // Set the preferences of Servo.
         // servo_config::prefs::set(
         let preference = Preferences {
             devtools_server_enabled,
-            devtools_server_listen_address: devtools_address,
+            devtools_server_listen_address: "".to_string(),
             dom_notification_enabled: true, // experimental feature
             user_agent: self.user_agent.clone(),
             ..Default::default()
