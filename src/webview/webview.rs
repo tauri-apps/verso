@@ -1,14 +1,14 @@
 use arboard::Clipboard;
-use base::id::WebViewId;
-use constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 use crossbeam_channel::Sender;
 use embedder_traits::{
-    AlertResponse, AllowOrDeny, ConfirmResponse, EmbedderMsg, LoadStatus,
-    PromptResponse, SimpleDialog, TraversalId, ViewportDetails,
+    AlertResponse, AllowOrDeny, ConfirmResponse, EmbedderMsg, LoadStatus, PromptResponse,
+    TraversalId, ViewportDetails,
 };
 use euclid::Scale;
 use ipc_channel::ipc;
 use servo::WebView;
+use servo_base::id::WebViewId;
+use servo_constellation_traits::{EmbedderToConstellationMessage, TraversalDirection};
 use servo_url::ServoUrl;
 use url::Url;
 use versoview_messages::ToControllerMessage;
@@ -18,10 +18,6 @@ use crate::{
     bookmark::BookmarkManager,
     tab::{TabActivateRequest, TabCloseRequest, TabCreateResponse},
     verso::send_to_constellation,
-    webview::{
-        // history_menu::{HistoryMenuUIResponse, OpenHistoryMenuRequest},
-        // prompt::{HttpBasicAuthInputResult, PromptDialog, PromptInputResult, PromptSender},
-    },
     window::Window,
 };
 

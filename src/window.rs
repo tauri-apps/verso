@@ -1,45 +1,33 @@
 use std::{cell::Cell, collections::HashMap, ops::Deref, rc::Rc};
 
-use base::{generic_channel::GenericSender, id::WebViewId};
-use constellation_traits::EmbedderToConstellationMessage;
-use crossbeam_channel::Sender;
-use embedder_traits::{
-    AlertResponse, AllowOrDeny, ConfirmResponse, Cursor, EmbedderMsg, ImeEvent, InputEvent,
-    MouseButton, MouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent,
-    Notification, PromptResponse, ScreenMetrics, TouchEventType, ViewportDetails,
-    WebResourceResponseMsg, WheelMode,
+use embedder_traits::{EmbedderMsg, MouseButtonEvent, MouseMoveEvent, Notification};
+use servo::{
+    Code, Cursor, DeviceIntRect, DevicePoint, DeviceVector2D, GenericSender, InputEvent,
+    MouseButton, MouseButtonAction, ScreenMetrics, WebResourceResponseMsg, WheelMode,
 };
+use servo_base::id::WebViewId;
+use servo_constellation_traits::EmbedderToConstellationMessage;
+use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
+use webrender_api::units::{DeviceRect, DeviceSize};
+//use servo_em::{EmbedderMsg};
+use crossbeam_channel::Sender;
 use euclid::{Point2D, Scale, Size2D};
 use ipc_channel::ipc::IpcSender;
-use keyboard_types::{
-    Code, CompositionEvent, CompositionState, KeyState, KeyboardEvent, Modifiers,
-};
+use keyboard_types::{KeyState, KeyboardEvent, Modifiers};
 #[cfg(any(target_os = "macos", target_os = "windows"))]
 use muda::{MenuEvent, MenuEventReceiver};
 #[cfg(linux)]
 use notify_rust::Image;
-#[cfg(target_os = "macos")]
-use raw_window_handle::HasWindowHandle;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use servo::{
-    LoadStatus, RenderingContext, Scroll, Servo, WebViewBuilder, WebViewDelegate,
-    WindowRenderingContext,
+    LoadStatus, RenderingContext, Scroll, WebViewBuilder, WebViewDelegate, WindowRenderingContext,
 };
-use servo_geometry::{convert_rect_to_css_pixel, convert_size_to_css_pixel};
-use servo_url::ServoUrl;
 use versoview_messages::ToControllerMessage;
-use webrender_api::{
-    ScrollLocation,
-    units::{
-        DeviceIntPoint, DeviceIntRect, DevicePixel, DevicePoint, DeviceRect, DeviceSize,
-        DeviceVector2D, LayoutVector2D,
-    },
-};
 #[cfg(any(linux, target_os = "windows"))]
 use winit::window::ResizeDirection;
 use winit::{
     dpi::{LogicalPosition, LogicalSize, PhysicalPosition},
-    event::{ElementState, Ime, TouchPhase, WindowEvent},
+    event::{ElementState, WindowEvent},
     event_loop::ActiveEventLoop,
     keyboard::ModifiersState,
     window::{CursorIcon, Window as WinitWindow, WindowAttributes, WindowId},
@@ -50,7 +38,6 @@ use crate::{
     bookmark::BookmarkManager,
     keyboard::keyboard_event_from_winit,
     tab::TabManager,
-    verso::send_to_constellation,
     webview::{
         Panel,
         // prompt::PromptSender, webview_menu::WebViewMenu
@@ -329,12 +316,13 @@ impl Window {
             verso: verso.clone(),
             window_id: self.id(),
         });
-        let webview = WebViewBuilder::new(&verso.servo)
+        let webview = WebViewBuilder::new(&verso.servo, self.rendering_context.clone())
             .url(url::Url::parse("verso://resources/components/panel.html").unwrap())
             .hidpi_scale_factor(hidpi_scale_factor)
-            .size(size)
             .delegate(Rc::new(delegate))
             .build();
+
+        webview.resize(size);
         self.panel = Some(Panel {
             webview,
             initial_url,
@@ -356,13 +344,13 @@ impl Window {
             verso: verso.clone(),
             window_id: self.id(),
         };
-        let webview = WebViewBuilder::new(&verso.servo)
+        let webview = WebViewBuilder::new(&verso.servo, self.rendering_context.clone())
             .url(initial_url)
             .hidpi_scale_factor(hidpi_scale_factor)
-            .size(content_size)
             .delegate(Rc::new(delegate))
             .build();
 
+        webview.resize(content_size);
         if let Some(panel) = &self.panel {
             let cmd: String = format!(
                 "window.navbar.addTab('{}', {})",
@@ -572,7 +560,7 @@ impl Window {
             }
             WindowEvent::PinchGesture { delta, .. } => {
                 let center = self.mouse_position.get().unwrap_or_default();
-                webview.pinch_zoom(
+                webview.adjust_pinch_zoom(
                     *delta as f32 + 1.0,
                     Point2D::new(center.x as f32, center.y as f32),
                 );
@@ -1061,18 +1049,23 @@ impl Window {
     /// returns the [`WebViewId`] of that webview
     fn forward_mouse_move(&self, point: DevicePoint) -> Option<WebViewId> {
         for webview in [
-            &self.tab_manager.current_tab().map(|tab| tab.webview()),
-            &self.panel.as_ref().map(|panel| &panel.webview),
+            self.tab_manager.current_tab().map(|tab| tab.webview()),
+            self.panel
+                .as_ref()
+                .map(|panel| panel.webview.clone())
+                .as_ref(),
         ]
         .into_iter()
-        .filter_map(|webview| *webview)
+        .flatten()
         {
-            if !webview.rect().contains(point) {
+            let size = webview.size();
+            let rect = DeviceRect::from_size(size);
+
+            if !rect.contains(point) {
                 continue;
             }
 
             webview.notify_input_event(InputEvent::MouseMove(MouseMoveEvent::new(point.into())));
-
             return Some(webview.id());
         }
 

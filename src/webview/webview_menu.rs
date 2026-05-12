@@ -1,14 +1,13 @@
-use constellation_traits::EmbedderToConstellationMessage;
 use crossbeam_channel::Sender;
 use dpi::{LogicalPosition, PhysicalPosition};
-use embedder_traits::ViewportDetails;
+use embedder_traits::{NewWebViewDetails, ViewportDetails};
 use euclid::Scale;
+use servo::WebView;
+use servo_constellation_traits::EmbedderToConstellationMessage;
 use servo_url::ServoUrl;
 use webrender_api::units::DeviceRect;
 
 use crate::{verso::send_to_constellation, window::Window};
-
-use super::WebView;
 
 /// Trait for webview menus
 pub trait WebViewMenu {
@@ -38,10 +37,14 @@ pub trait WebViewMenu {
             sender,
             EmbedderToConstellationMessage::NewWebView(
                 self.resource_url(),
-                self.webview().webview_id,
-                ViewportDetails {
-                    size,
-                    hidpi_scale_factor,
+                NewWebViewDetails {
+                    webview_id: self.webview().id(),
+                    viewport_details: ViewportDetails {
+                        size,
+                        hidpi_scale_factor,
+                    },
+                    // Todo: create userContentManager
+                    user_content_manager_id: None,
                 },
             ),
         );
@@ -50,7 +53,7 @@ pub trait WebViewMenu {
     fn close(&mut self, sender: &Sender<EmbedderToConstellationMessage>) {
         send_to_constellation(
             sender,
-            EmbedderToConstellationMessage::CloseWebView(self.webview().webview_id),
+            EmbedderToConstellationMessage::CloseWebView(self.webview().id()),
         );
     }
 }

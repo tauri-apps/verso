@@ -1,21 +1,19 @@
 use std::{
     fs,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use dpi::{LogicalSize, PhysicalPosition, PhysicalSize};
-use embedder_traits::resources::{self, Resource, ResourceReaderMethods};
-use embedder_traits::user_content_manager::UserScript as ServoUserScript;
+use embedder_traits::resources::{Resource, ResourceReaderMethods};
+//use embedder_traits::user_content_manager::UserScript as ServoUserScript;
 use headers::{ContentType, HeaderMapExt};
 use net::protocols::{ProtocolHandler, ProtocolRegistry};
-use net_traits::{
-    ResourceFetchTiming,
-    request::Request,
-    response::{Response, ResponseBody},
-};
-use servo_config::{
-    opts::{Opts, OutputOptions},
-    prefs::Preferences,
+use net_traits::{NetworkError, ResourceFetchTiming, response::ResponseBody};
+use servo::{
+    Opts, OutputOptions, Preferences,
+    protocol_handler::{Request, Response},
+    user_contents::UserScript as ServoUserScript,
 };
 use versoview_messages::{ConfigFromController, CustomProtocol, UserScript};
 use winit::window::{Fullscreen, WindowAttributes};
@@ -45,8 +43,8 @@ pub struct CliArgs {
     pub position: Option<PhysicalPosition<i32>>,
     /// Don't maximize the initial window
     pub no_maximized: bool,
-    /// Port number to start a server to listen to remote Firefox devtools connections. 0 for random port.
-    pub devtools_port: Option<u16>,
+    /// Devtools address to start a server to listen to remote Firefox devtools connections.
+    //  pub devtools_address: Option<String>,
     /// Start remote WebDriver server on port
     pub webdriver_port: Option<u16>,
     /// Servo time profile settings
@@ -178,10 +176,12 @@ pub fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
     let resource_dir = matches.opt_str("resources").map(PathBuf::from);
     let ipc_channel = matches.opt_str("ipc-channel");
     let no_panel = matches.opt_present("no-panel");
-    let devtools_port = matches.opt_get::<u16>("devtools-port").unwrap_or_else(|e| {
-        log::error!("Failed to parse devtools-port command line argument: {e}");
-        None
-    });
+    //  let devtools_address = matches
+    //      .opt_get::<String>("devtools-address")
+    //     .unwrap_or_else(|e| {
+    //        log::error!("Failed to parse devtools-address command line argument: {e}");
+    //        None
+    //   });
     let webdriver_port = matches
         .opt_get::<u16>("webdriver-port")
         .unwrap_or_else(|e| {
@@ -262,7 +262,7 @@ pub fn parse_cli_args() -> Result<CliArgs, getopts::Fail> {
         resource_dir,
         ipc_channel,
         no_panel,
-        devtools_port,
+        //   devtools_address,
         webdriver_port,
         profiler_settings,
         user_agent,
@@ -284,8 +284,8 @@ pub struct Config {
     pub with_panel: bool,
     /// Window settings for the initial winit window
     pub window_attributes: WindowAttributes,
-    /// Port number to start a server to listen to remote Firefox devtools connections. 0 for random port.
-    pub devtools_port: Option<u16>,
+    /// Devtools address to start a server to listen to remote Firefox devtools connections.
+    // pub devtools_address: Option<String>,
     /// Start remote WebDriver server on port
     pub webdriver_port: Option<u16>,
     /// Servo time profile settings
@@ -316,7 +316,7 @@ impl Config {
         Self::from_controller_config(ConfigFromController {
             url: cli_args.url,
             with_panel: !cli_args.no_panel,
-            devtools_port: cli_args.devtools_port,
+            //  devtools_address: cli_args.devtools_address,
             profiler_settings: cli_args.profiler_settings,
             user_agent: cli_args.user_agent,
             user_scripts,
@@ -391,17 +391,14 @@ impl Config {
                 .unwrap_or_else(|| url::Url::parse("https://example.com").unwrap()),
             with_panel,
             window_attributes,
-            devtools_port: config.devtools_port,
+            //  devtools_address: config.devtools_address,
             webdriver_port: config.webdriver_port,
             profiler_settings,
             user_agent,
             user_scripts: config
                 .user_scripts
                 .into_iter()
-                .map(|userscript| ServoUserScript {
-                    script: userscript.script,
-                    source_file: userscript.source_file,
-                })
+                .map(|userscript| ServoUserScript::new(userscript.script, userscript.source_file))
                 .collect(),
             zoom_level: config.zoom_level,
             resource_dir,
@@ -430,7 +427,7 @@ impl Config {
     /// Init options and preferences.
     pub fn init(&self) -> (Opts, Preferences) {
         // Set the resource files of Servo.
-        resources::set(Box::new(ResourceReader(self.resource_dir.clone())));
+        //   RESOURCE_READER.resource_dir.set(self.resource_dir.clone());
 
         let mut opts = Opts::default();
 
@@ -441,19 +438,19 @@ impl Config {
 
         // Set the global options of Servo.
         // initialize_options(opts);
-
-        let (devtools_server_enabled, devtools_port) =
-            if let Some(devtools_port) = self.devtools_port {
-                (true, devtools_port)
-            } else {
-                (false, 0)
-            };
+        let devtools_server_enabled = false;
+        //  let (devtools_server_enabled, devtools_address) =
+        // if let Some(devtools_address) = self.devtools_address.clone() {
+        //      (true, devtools_address)
+        //  } else {
+        //   (false, "".to_string())
+        // };
 
         // Set the preferences of Servo.
         // servo_config::prefs::set(
         let preference = Preferences {
             devtools_server_enabled,
-            devtools_server_port: devtools_port as i64,
+            devtools_server_listen_address: "".to_string(),
             dom_notification_enabled: true, // experimental feature
             user_agent: self.user_agent.clone(),
             ..Default::default()
@@ -554,11 +551,11 @@ impl ProtocolHandler for ResourceReader {
                 }
             }
 
-            *response.body.lock().unwrap() = ResponseBody::Done(file);
+            *response.body.lock() = ResponseBody::Done(file);
 
             response
         } else {
-            Response::network_internal_error("Opening file failed")
+            Response::network_error(NetworkError::Crash("Opening file failed".to_string()))
         };
 
         Box::pin(std::future::ready(response))
@@ -575,8 +572,10 @@ impl ProtocolHandler for CustomProtocolHandler {
         done_chan: &mut net::fetch::methods::DoneChannel,
         context: &net::fetch::methods::FetchContext,
     ) -> std::pin::Pin<Box<dyn Future<Output = Response> + Send>> {
-        Box::pin(std::future::ready(Response::network_internal_error(
-            "This should be handled through `on_web_resource_requested` instead",
+        Box::pin(std::future::ready(Response::network_error(
+            NetworkError::Crash(
+                "This should be handled through `on_web_resource_requested` instead".to_string(),
+            ),
         )))
     }
 
